@@ -1,4 +1,5 @@
 """Static PNG of the backtest suite (equity on a log scale + drawdowns)."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -12,7 +13,9 @@ def suite_png(results: dict[str, Result], path: Path, title: str = "") -> Path:
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    fig, (a, b) = plt.subplots(2, 1, figsize=(12, 9), sharex=True, gridspec_kw={"height_ratios": [3, 1]})
+    fig, (a, b) = plt.subplots(
+        2, 1, figsize=(12, 9), sharex=True, gridspec_kw={"height_ratios": [3, 1]}
+    )
     for k, r in results.items():
         ls = "--" if k in ("QQQ", "EW universe") else "-"
         a.plot(r.equity.index, r.equity, label=k, ls=ls, lw=1.4)

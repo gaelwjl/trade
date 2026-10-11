@@ -43,12 +43,3 @@ def bollinger(
     sd = close.rolling(n, min_periods=n).std(ddof=0)
     up, lo = mid + k * sd, mid - k * sd
     return Indicator(up), mid, Indicator(lo), Indicator((close - lo) / (up - lo))
-
-
-def atr(high: PriceFrame, low: PriceFrame, close: PriceFrame, n: int = 14) -> Indicator:
-    """Wilder average true range."""
-    pc = close.shift(1)
-    a, b, c = high - low, (high - pc).abs(), (low - pc).abs()
-    tr = a.where(a >= b, b)
-    tr = tr.where(tr >= c, c)
-    return Indicator(tr.ewm(alpha=1 / n, adjust=False, min_periods=n).mean())

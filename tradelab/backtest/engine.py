@@ -13,6 +13,7 @@ Costs: one-way ``(commission_bps + slippage_bps)`` on traded notional, ``borrow_
 on short notional, and ``cash_rate`` per year earned on uninvested cash (negative cash = leverage
 financed at the same rate). Defaults are sized for liquid large caps.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -58,19 +59,33 @@ class Result:
     def exposure(self) -> pd.Series:
         return self.weights.abs().sum(axis=1)
 
-    def between(self, start: str | pd.Timestamp | None = None, end: str | pd.Timestamp | None = None) -> "Result":
+    def between(
+        self,
+        start: str | pd.Timestamp | None = None,
+        end: str | pd.Timestamp | None = None,
+    ) -> "Result":
         """Sub-period [start, end) rebased to 1. The bar before ``start`` is kept as the base so the
         first in-period return is not lost."""
         idx = self.equity.index
-        lo = max(int(idx.searchsorted(pd.Timestamp(start))) - 1, 0) if start is not None else 0
+        lo = (
+            max(int(idx.searchsorted(pd.Timestamp(start))) - 1, 0)
+            if start is not None
+            else 0
+        )
         hi = int(idx.searchsorted(pd.Timestamp(end))) if end is not None else len(idx)
         eq = self.equity.iloc[lo:hi]
         return Result(
-            equity=eq / eq.iloc[0], weights=Weights(self.weights.iloc[lo:hi]), turnover=self.turnover.iloc[lo:hi],
-            costs=self.costs.iloc[lo:hi], name=self.name, meta=self.meta,
+            equity=eq / eq.iloc[0],
+            weights=Weights(self.weights.iloc[lo:hi]),
+            turnover=self.turnover.iloc[lo:hi],
+            costs=self.costs.iloc[lo:hi],
+            name=self.name,
+            meta=self.meta,
         )
 
-    def stats(self, benchmark: pd.Series | None = None, rf: float = 0.0) -> dict[str, float]:
+    def stats(
+        self, benchmark: pd.Series | None = None, rf: float = 0.0
+    ) -> dict[str, float]:
         s = summarize(self.returns, benchmark, rf)
         if s:
             s["Turnover/yr"] = self.turnover.sum() / (len(self.turnover) / TRADING_DAYS)
@@ -96,7 +111,12 @@ def rebalance_dates(index: pd.DatetimeIndex, rebalance: str | int) -> np.ndarray
     mask = index.isin(last.values)
     # The final period may still be running: its last *available* day is not a decision day
     # unless the calendar says it really is the period's last session.
-    if len(index) and mask[-1] and rule in ("W-FRI", "ME", "QE") and not cal.is_period_end(index[-1].date(), rule):
+    if (
+        len(index)
+        and mask[-1]
+        and rule in ("W-FRI", "ME", "QE")
+        and not cal.is_period_end(index[-1].date(), rule)
+    ):
         mask[-1] = False
     return mask
 
@@ -122,22 +142,32 @@ def backtest(
     px = (panel.open if execution == "next_open" else panel.close).copy()
     idx = px.index
     cols = px.columns
-    unknown = [s for s in weights.columns if s not in cols and weights[s].fillna(0).ne(0).any()]
+    unknown = [
+        s for s in weights.columns if s not in cols and weights[s].fillna(0).ne(0).any()
+    ]
     if unknown:
         raise ValueError(f"weights on symbols missing from the panel: {unknown[:10]}")
     W = weights.reindex(index=idx, columns=cols).fillna(0.0).to_numpy(float, copy=True)
-    if start:  # strategy may use pre-start data as warm-up, but the book starts flat at `start`
+    if (
+        start
+    ):  # strategy may use pre-start data as warm-up, but the book starts flat at `start`
         W[idx < pd.Timestamp(start)] = 0.0
 
     valid = px.notna().to_numpy()
-    X = px.ffill().to_numpy(float)  # stale-forward so a missing day is a 0% return, not a crash
+    X = px.ffill().to_numpy(
+        float
+    )  # stale-forward so a missing day is a 0% return, not a crash
     with np.errstate(invalid="ignore", divide="ignore"):
         R = X[1:] / X[:-1] - 1.0
     R = np.nan_to_num(R, nan=0.0, posinf=0.0, neginf=0.0)
 
     decide = rebalance_dates(pd.DatetimeIndex(idx), rebalance)
     n, m = X.shape
-    c1, borrow_d, cash_d = costs.one_way, costs.borrow_bps / 1e4 / TRADING_DAYS, cash_rate / TRADING_DAYS
+    c1, borrow_d, cash_d = (
+        costs.one_way,
+        costs.borrow_bps / 1e4 / TRADING_DAYS,
+        cash_rate / TRADING_DAYS,
+    )
 
     equity = np.ones(n)
     held = np.zeros((n, m))
@@ -174,11 +204,11 @@ def backtest(
         turnover=pd.Series(turnover, idx)[sl],
         costs=pd.Series(cost_frac, idx)[sl],
         name=name,
-        meta={"rebalance": rebalance, "execution": execution, "costs": costs, "cash_rate": cash_rate},
+        meta={
+            "rebalance": rebalance,
+            "execution": execution,
+            "costs": costs,
+            "cash_rate": cash_rate,
+        },
     )
     return res.between(None, pd.Timestamp(end) + pd.Timedelta(days=1)) if end else res
-
-
-def buy_and_hold(close: pd.Series, name: str = "") -> pd.Series:
-    """Close-to-close daily returns of holding one asset (benchmark helper)."""
-    return close.pct_change().dropna().rename(name)

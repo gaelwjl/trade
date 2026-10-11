@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Backtests</title>
+<style>
+/*__CSS__*/
+dialog { border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--ink); max-width: min(760px, 94vw); padding: 0; }
+dialog::backdrop { background: rgba(0, 0, 0, .35); }
+dialog .tablewrap { max-height: 280px; }
+.statusq { color: var(--ink2); }
+.statusf { color: var(--neg); }
+</style>
+</head>
+<body>
+<!--__NAV__-->
+<div class="wrap">
+  <header>
+    <h1>Backtests</h1>
+    <span class="sub" id="meta"></span>
+    <span class="spacer"></span>
+    <button id="theme" title="Toggle light / dark">Theme</button>
+  </header>
+  <p class="lede muted">Runs are batch jobs: the worker (<code>tradelab worker</code>) runs them in the background and stores results that never change.
+    Judge a run by its out-of-sample Sharpe and its return at 20 bps, not the full-period best; then promote it to drive daily suggestions.</p>
+
+  <section class="card" aria-label="Submit">
+    <div class="card-head"><h2>Submit a run</h2><span class="hint">a grid runs every combination (up to 200)</span></div>
+    <form class="inline" id="submitForm">
+      <label>Strategy<select name="strategy" id="strategy"></select></label>
+      <label>Start<input type="date" name="start" value="2005-01-01"></label>
+      <label>In/out-of-sample split<input type="date" name="split" value="2018-01-01"></label>
+      <label>Commission (bps)<input type="number" name="commission_bps" step="any" value="1"></label>
+      <label>Slippage (bps)<input type="number" name="slippage_bps" step="any" value="4"></label>
+      <label>Fill<select name="execution"><option value="next_open">next open</option><option value="next_close">next close</option></select></label>
+      <label style="flex:1 1 220px">Parameters (JSON)<textarea name="params" placeholder='{"lookback": 126}'></textarea></label>
+      <label style="flex:1 1 220px">Grid (JSON)<textarea name="grid" placeholder='{"window": [100, 150, 200]}'></textarea></label>
+      <button class="primary" type="submit">Queue</button>
+    </form>
+    <div class="pad hint" id="paramHint"></div>
+  </section>
+
+  <section class="card" aria-label="Runs">
+    <div class="card-head"><h2>Runs</h2><span class="hint" id="queueHint"></span><span class="spacer"></span>
+      <button id="compare" disabled>Compare selected</button></div>
+    <div class="tablewrap" id="runs"></div>
+  </section>
+</div>
+
+<dialog id="promote">
+  <div class="card-head"><h2 id="pTitle">Promote</h2></div>
+  <form class="inline" id="pForm">
+    <label>Capital ($)<input type="number" name="capital_usd" step="any" min="1" required></label>
+    <label>Minimum order ($)<input type="number" name="min_order_usd" step="any" min="0" value="100"></label>
+    <label><span>Fractional shares</span><input type="checkbox" name="fractional"></label>
+    <button type="button" id="pPreview">Preview</button>
+  </form>
+  <div id="pBody" class="pad"></div>
+  <div class="pad" style="display:flex;gap:8px;justify-content:flex-end">
+    <button type="button" id="pCancel">Cancel</button>
+    <button type="button" class="primary" id="pConfirm" disabled>Make active</button>
+  </div>
+</dialog>
+
+<script>
+"use strict";
+const D = null /*__DATA__*/;
+/*__COMMON_JS__*/
+
+let RUNS = [], STRATS = [], promoteId = null;
+const selected = new Set();
+
+function renderRuns() {
+  const busy = RUNS.filter((r) => r.status === "queued" || r.status === "running").length;
+  $("#queueHint").textContent = busy ? `${busy} queued or running · refreshing` : `${RUNS.length} runs`;
+  $("#compare").disabled = selected.size === 0 || selected.size > 6;
+  $("#compare").textContent = selected.size > 6 ? "Compare (6 at most)" : `Compare selected${selected.size ? ` (${selected.size})` : ""}`;
+  if (!RUNS.length) { $("#runs").innerHTML = `<div class="pad muted">No runs yet.</div>`; return; }
+  $("#runs").innerHTML = `<table><thead><tr><th></th><th>#</th><th class="l">Strategy</th><th class="l">Status</th><th class="l">Period</th>` +
+    `<th>CAGR</th><th>Sharpe</th><th>Max DD</th><th>OOS Sharpe</th><th>CAGR @20bps</th><th class="l">Data / code</th><th></th></tr></thead><tbody>` +
+    RUNS.map((r) => {
+      const m = r.summary || {};
+      const st = r.status === "failed" ? `<span class="statusf" title="${esc(r.error)}">failed</span>` : `<span class="statusq">${esc(r.status)}</span>`;
+      const canPromote = r.status === "done" && r.long_only;
+      return `<tr><td><input type="checkbox" data-sel="${r.id}" ${selected.has(r.id) ? "checked" : ""} ${r.status === "done" ? "" : "disabled"} aria-label="select run ${r.id}"></td>` +
+        `<td>${r.id}</td><td class="l">${esc(r.label)}${r.sweep_id ? ` <span class="badge">grid ${r.sweep_id}</span>` : ""}</td><td class="l">${st}</td>` +
+        `<td class="l">${esc(r.start)} · split ${esc(r.split)}</td><td style="${heatBg(m.CAGR, 0.3)}">${pct(m.CAGR)}</td><td>${num2(m.Sharpe)}</td>` +
+        `<td>${pctPlain(m.MaxDD)}</td><td>${num2(m.oos_Sharpe)}</td><td style="${heatBg(m.CAGR_20bps, 0.3)}">${pct(m.CAGR_20bps)}</td>` +
+        `<td class="l hint">${esc(r.data_as_of || "–")} · ${esc(r.code_sha || "")}</td>` +
+        `<td class="l">${canPromote ? `<button data-promote="${r.id}">Promote</button>` : r.status === "done" && !r.long_only ? '<span class="hint">holds shorts</span>' : ""}</td></tr>`;
+    }).join("") + "</tbody></table>";
+}
+async function load() { RUNS = await api("/api/backtests"); renderRuns(); }
+async function poll() {
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 4000));
+    if (RUNS.some((r) => r.status === "queued" || r.status === "running")) await load().catch(() => {});
+  }
+}
+
+api("/api/strategies").then((list) => {
+  STRATS = list;
+  $("#strategy").innerHTML = list.map((s) => `<option value="${esc(s.name)}">${esc(s.name)}${s.long_only ? "" : " (long-short)"}</option>`).join("");
+  showParams();
+});
+function showParams() {
+  const s = STRATS.find((x) => x.name === $("#strategy").value);
+  $("#paramHint").textContent = s ? `${s.description} Rebalance: ${s.rebalance}.` : "";
+}
+$("#strategy").addEventListener("change", showParams);
+$("#submitForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const body = formJson(e.target);
+  try {
+    for (const k of ["params", "grid"]) body[k] = body[k] ? JSON.parse(body[k]) : {};
+  } catch (err) { toast(`Parameters must be JSON: ${err.message}`); return; }
+  try { const made = await api("/api/backtests", { method: "POST", body }); toast(`Queued ${made.length} run${made.length > 1 ? "s" : ""}`); await load(); }
+  catch (err) { toast(err.message); }
+});
+$("#runs").addEventListener("change", (e) => {
+  const id = +e.target.dataset.sel; if (!id) return;
+  e.target.checked ? selected.add(id) : selected.delete(id);
+  renderRuns();
+});
+$("#compare").addEventListener("click", () => { location.href = `/backtests/compare?ids=${[...selected].join(",")}`; });
+
+// ---- promote dialog: preview today's target and orders before confirming
+$("#runs").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-promote]"); if (!b) return;
+  promoteId = +b.dataset.promote;
+  const r = RUNS.find((x) => x.id === promoteId);
+  $("#pTitle").textContent = `Promote run #${r.id}: ${r.label}`;
+  $("#pBody").innerHTML = `<div class="muted">Out-of-sample Sharpe ${num2(r.summary.oos_Sharpe)} · CAGR at 20 bps ${pct(r.summary.CAGR_20bps)} · full-period CAGR ${pct(r.summary.CAGR)}.<br>Set the capital, then preview the orders it would produce.</div>`;
+  $("#pConfirm").disabled = true;
+  $("#promote").showModal();
+});
+$("#pCancel").addEventListener("click", () => $("#promote").close());
+$("#pPreview").addEventListener("click", async () => {
+  const f = formJson($("#pForm"));
+  if (!f.capital_usd) { toast("Enter the capital first"); return; }
+  try {
+    const q = new URLSearchParams({ capital_usd: f.capital_usd, min_order_usd: f.min_order_usd ?? 100, fractional: !!f.fractional });
+    const p = await api(`/api/backtests/${promoteId}/preview?${q}`);
+    $("#pBody").innerHTML = `<div class="muted">Target after the close of ${esc(p.signal_date)} (${p.target.length} names); next rebalance after ${esc(p.next_rebalance)}. Cash available ${usd(p.cash_available)}.</div>` +
+      `<div class="tablewrap">${!p.orders.length ? `<div class="pad muted">No orders: you already hold this target.</div>` :
+        `<table><thead><tr><th class="l">Action</th><th class="l">Symbol</th><th>Qty</th><th>Ref. price</th><th>Value</th></tr></thead><tbody>` +
+        p.orders.map((o) => `<tr><td class="l">${actBadge(o.action)}</td><td class="sym">${esc(o.symbol)}</td><td>${qtyFmt(o.qty)}</td><td>${usd(o.ref_price)}</td><td>${usd(o.qty * o.ref_price)}</td></tr>`).join("") +
+        "</tbody></table>"}</div><div class="hint">These orders appear on Today after the next daily run. Nothing is traded for you.</div>`;
+    $("#pConfirm").disabled = false;
+  } catch (err) { toast(err.message); }
+});
+$("#pConfirm").addEventListener("click", async () => {
+  try { await api(`/api/backtests/${promoteId}/promote`, { method: "POST", body: formJson($("#pForm")) }); $("#promote").close(); toast("Active strategy updated"); location.href = "/strategy"; }
+  catch (err) { toast(err.message); }
+});
+
+initTheme(renderRuns);
+load().then(poll).catch((err) => toast(err.message));
+</script>
+</body>
+</html>

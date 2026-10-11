@@ -18,7 +18,10 @@ def test_drawdown_value():
 
 
 def test_beta_of_scaled_benchmark():
-    b = pd.Series(np.random.default_rng(1).normal(0, 0.01, 500), index=pd.bdate_range("2020-01-01", periods=500))
+    b = pd.Series(
+        np.random.default_rng(1).normal(0, 0.01, 500),
+        index=pd.bdate_range("2020-01-01", periods=500),
+    )
     s = summarize(2 * b, b)
     assert s["Beta"] == pytest.approx(2.0)
     assert s["Alpha"] == pytest.approx(0.0, abs=1e-9)

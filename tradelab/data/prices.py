@@ -3,6 +3,7 @@
 Prices are stored split- and dividend-adjusted (yfinance ``auto_adjust=True``), one parquet
 file per symbol under ``data/prices``. Use ``Panel.load()`` to get wide date x symbol frames.
 """
+
 from __future__ import annotations
 
 import datetime as dt
@@ -27,7 +28,9 @@ NASDAQ100 = "nasdaq100"  # universe name for the current constituents
 FIELDS = ["Open", "High", "Low", "Close", "Volume"]
 
 MARKET_TZ = "America/New_York"
-SESSION_DONE = dt.time(16, 15)  # regular close is 16:00 ET; allow a few minutes for the final print
+SESSION_DONE = dt.time(
+    16, 15
+)  # regular close is 16:00 ET; allow a few minutes for the final print
 
 _SUFFIX = re.compile(
     r"\s+(Class [A-Z]\s+)?(Common Stock|Ordinary Shares?|American Depositary Shares?|Capital Stock|Common Shares?|Depositary Shares?).*$",
@@ -51,11 +54,15 @@ def fetch_constituents() -> ConstituentTable:
         {
             "symbol": df["symbol"].str.strip(),
             "name": df["companyName"],
-            "market_cap": pd.to_numeric(df["marketCap"].str.replace(",", ""), errors="coerce"),
+            "market_cap": pd.to_numeric(
+                df["marketCap"].str.replace(",", ""), errors="coerce"
+            ),
             "as_of": payload.get("date"),
         }
     )
-    return ConstituentTable(out.sort_values("market_cap", ascending=False).reset_index(drop=True))
+    return ConstituentTable(
+        out.sort_values("market_cap", ascending=False).reset_index(drop=True)
+    )
 
 
 def load_constituents() -> ConstituentTable:
@@ -98,8 +105,13 @@ def download_prices(symbols: list[str], batch_size: int = 25) -> dict[str, Bars]
     for i in range(0, len(symbols), batch_size):
         batch = symbols[i : i + batch_size]
         raw = yf.download(
-            batch, period="max", interval="1d", auto_adjust=True,
-            group_by="ticker", threads=True, progress=False,
+            batch,
+            period="max",
+            interval="1d",
+            auto_adjust=True,
+            group_by="ticker",
+            threads=True,
+            progress=False,
         )
         for s in batch:
             try:
@@ -114,6 +126,57 @@ def download_prices(symbols: list[str], batch_size: int = 25) -> dict[str, Bars]
         if len(df):
             out[s] = df
     return {s: drop_incomplete_bar(df) for s, df in out.items()}
+
+
+@dataclass(frozen=True)
+class RawHistory:
+    """Unadjusted closes and corporate actions for one symbol (for portfolio valuation)."""
+
+    close: pd.Series  # what the market actually quoted each day
+    actions: list[tuple[dt.date, str, float]]  # (ex_date, "split" | "dividend", value)
+
+
+def unadjust(bars: pd.DataFrame) -> RawHistory:
+    """Undo Yahoo's split adjustment.
+
+    With ``auto_adjust=False`` Yahoo's Close and dividend amounts are still restated in today's
+    share count; multiplying back every split *after* a date gives the price quoted that day.
+    """
+    bars = bars.sort_index()
+    splits = bars.get("Stock Splits", pd.Series(0.0, index=bars.index)).fillna(0.0)
+    ratio = splits.where(splits > 0, 1.0)
+    # product of split ratios strictly after each date
+    later = ratio[::-1].cumprod()[::-1].shift(-1, fill_value=1.0)
+    close = (bars["Close"] * later).dropna()
+    split_days = splits[splits > 0]
+    actions = [
+        (d.date(), "split", float(r))
+        for d, r in zip(pd.DatetimeIndex(split_days.index), split_days)
+    ]
+    divs = bars.get("Dividends", pd.Series(0.0, index=bars.index)).fillna(0.0)
+    paid = divs[divs > 0]
+    actions += [
+        (d.date(), "dividend", float(v * f))
+        for d, v, f in zip(
+            pd.DatetimeIndex(paid.index), paid, later.reindex(paid.index)
+        )
+    ]
+    return RawHistory(close=close, actions=sorted(actions))
+
+
+def download_raw(symbols: list[str]) -> dict[str, RawHistory]:
+    """Unadjusted closes + splits + dividends (full history) for ``symbols``."""
+    out = {}
+    for s in symbols:
+        df = yf.Ticker(s).history(
+            period="max", interval="1d", auto_adjust=False, actions=True
+        )
+        if not len(df):
+            continue
+        df.index = pd.to_datetime(df.index).tz_localize(None).normalize()
+        df = drop_incomplete_bar(Bars(df[~df.index.duplicated(keep="last")]))
+        out[s] = unadjust(df)
+    return out
 
 
 def interior_gaps(close: PriceFrame) -> Mask:
@@ -142,10 +205,14 @@ class Panel:
     low: PriceFrame
     close: PriceFrame
     volume: PriceFrame
-    filled: Mask | None = None  # bars that were missing and forward-filled by ``from_frames``
+    filled: Mask | None = (
+        None  # bars that were missing and forward-filled by ``from_frames``
+    )
 
     @classmethod
-    def load(cls, symbols: list[str] | None = None, dedupe: bool = True, max_gap: int = 5) -> "Panel":
+    def load(
+        cls, symbols: list[str] | None = None, dedupe: bool = True, max_gap: int = 5
+    ) -> "Panel":
         """Load cached prices.
 
         Default universe: current Nasdaq-100 constituents, one share class per company when
@@ -165,8 +232,12 @@ class Panel:
                 if f in df:
                     cols[f][s] = df[f]
         if not cols["Close"]:
-            raise FileNotFoundError("No cached prices found. Run: python -m tradelab fetch")
-        return cls.from_frames({f: PriceFrame(pd.DataFrame(c)) for f, c in cols.items()}, max_gap)
+            raise FileNotFoundError(
+                "No cached prices found. Run: python -m tradelab fetch"
+            )
+        return cls.from_frames(
+            {f: PriceFrame(pd.DataFrame(c)) for f, c in cols.items()}, max_gap
+        )
 
     @classmethod
     def load_universe(cls, universe: str) -> "Panel":
@@ -184,17 +255,26 @@ class Panel:
         idx = frames["Close"].index.sort_values()
         f = {k: d.reindex(idx) for k, d in frames.items()}
         close = f["Close"]
-        fill = Mask(interior_gaps(PriceFrame(close)).apply(lambda g: _short_runs(g, max_gap)))
+        fill = Mask(
+            interior_gaps(PriceFrame(close)).apply(lambda g: _short_runs(g, max_gap))
+        )
         last = close.ffill()
         if fill.to_numpy().any():
-            warnings.warn(f"forward-filled {int(fill.to_numpy().sum())} missing bars: "
-                          f"{fill.sum()[lambda s: s > 0].to_dict()}", stacklevel=2)
+            warnings.warn(
+                f"forward-filled {int(fill.to_numpy().sum())} missing bars: "
+                f"{fill.sum()[lambda s: s > 0].to_dict()}",
+                stacklevel=2,
+            )
         for k in ("Open", "High", "Low", "Close"):
             f[k] = f[k].mask(fill, last)
         f["Volume"] = f["Volume"].mask(fill, 0.0)
         return cls(
-            open=PriceFrame(f["Open"]), high=PriceFrame(f["High"]), low=PriceFrame(f["Low"]),
-            close=PriceFrame(f["Close"]), volume=PriceFrame(f["Volume"]), filled=fill,
+            open=PriceFrame(f["Open"]),
+            high=PriceFrame(f["High"]),
+            low=PriceFrame(f["Low"]),
+            close=PriceFrame(f["Close"]),
+            volume=PriceFrame(f["Volume"]),
+            filled=fill,
         )
 
     @property

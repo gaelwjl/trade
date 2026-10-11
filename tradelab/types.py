@@ -14,38 +14,35 @@ from typing import NewType
 import pandas as pd
 
 # --- wide (date x symbol) ---
-PriceFrame = NewType(
-    "PriceFrame", pd.DataFrame
-)  # one adjusted OHLCV field (open, close, volume, ...)
-ReturnFrame = NewType("ReturnFrame", pd.DataFrame)  # simple per-bar returns
-Indicator = NewType(
-    "Indicator", pd.DataFrame
-)  # a technical indicator computed from prices (SMA, RSI, ...)
-Scores = NewType(
-    "Scores", pd.DataFrame
-)  # cross-sectional signal values to rank (momentum, volatility, ...)
-Mask = NewType(
-    "Mask", pd.DataFrame
-)  # booleans: which symbols satisfy a condition on each date
-Weights = NewType(
-    "Weights", pd.DataFrame
-)  # portfolio weights as a fraction of equity (negative = short)
+# one adjusted OHLCV field (open, close, volume, ...)
+PriceFrame = NewType("PriceFrame", pd.DataFrame)
+# simple per-bar returns
+ReturnFrame = NewType("ReturnFrame", pd.DataFrame)
+# a technical indicator computed from prices (SMA, RSI, ...)
+Indicator = NewType("Indicator", pd.DataFrame)
+# cross-sectional signal values to rank (momentum, volatility, ...)
+Scores = NewType("Scores", pd.DataFrame)
+# booleans: which symbols satisfy a condition on each date
+Mask = NewType("Mask", pd.DataFrame)
+# portfolio weights as a fraction of equity (negative = short)
+Weights = NewType("Weights", pd.DataFrame)
 
 # --- single symbol ---
-Bars = NewType("Bars", pd.DataFrame)  # one symbol's OHLCV rows indexed by date
+# one symbol's OHLCV rows indexed by date
+Bars = NewType("Bars", pd.DataFrame)
 
 # --- one row per entity ---
-ConstituentTable = NewType(
-    "ConstituentTable", pd.DataFrame
-)  # index members: symbol, name, market_cap, as_of
-ScreenTable = NewType(
-    "ScreenTable", pd.DataFrame
-)  # screener snapshot, indexed by symbol
-StatsTable = NewType(
-    "StatsTable", pd.DataFrame
-)  # performance stats, one row per strategy / param combo
+# index members: symbol, name, market_cap, as_of
+ConstituentTable = NewType("ConstituentTable", pd.DataFrame)
+# screener snapshot, indexed by symbol
+ScreenTable = NewType("ScreenTable", pd.DataFrame)
+# performance stats, one row per strategy / param combo
+StatsTable = NewType("StatsTable", pd.DataFrame)
+# per-symbol data checks after a fetch, indexed by symbol
+QualityTable = NewType("QualityTable", pd.DataFrame)
 
-# --- your own trading ---
-TradeLedger = NewType("TradeLedger", pd.DataFrame)  # one row per fill: date, side, symbol, qty, price, fees, strategy, note
-PositionTable = NewType("PositionTable", pd.DataFrame)  # one row per open position, indexed by symbol
-QualityTable = NewType("QualityTable", pd.DataFrame)  # per-symbol data checks after a fetch, indexed by symbol
+# --- your portfolio ---
+# one row per open position, indexed by symbol
+PositionTable = NewType("PositionTable", pd.DataFrame)
+# one row per session: equity, cash, P&L parts, time-weighted return index
+SnapshotTable = NewType("SnapshotTable", pd.DataFrame)

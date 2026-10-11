@@ -1,6 +1,6 @@
 # tradelab Web App — Design
 
-**Date:** 2026-10-11 · **Status:** approved as the phase 1 design · **Live doc:** [tradelab Web App — Design](https://claude.ai/code/artifact/9a0a0e69-bd6b-4ee2-ae30-5316794abe82) (this file is a snapshot of it)
+**Date:** 2026-10-11 · **Status:** phase 1 implemented and running (2026-10-11); see Implementation notes at the end · **Live doc:** [tradelab Web App — Design](https://claude.ai/code/artifact/9a0a0e69-bd6b-4ee2-ae30-5316794abe82) (this file is a snapshot of it)
 
 ## Summary
 
@@ -96,7 +96,7 @@ Fills and cash flows are the only facts you enter; everything else (lots, snapsh
 | `raw_closes` | symbol, date, close | Unadjusted closes for valuation; research keeps the adjusted parquet cache |
 | `portfolio_snapshots` | date, market_value, cash, net_flows, realized_cum, unrealized, day_pnl, twr_index | One row per session; drives the P&L chart |
 | `strategy_configs` | id, strategy_name, params_json, code_sha | A strategy with its parameters pinned |
-| `active_strategy` | config_id, promoted_from_run, capital_mode, capital, min_order_usd, activated_at | One row: what drives suggestions |
+| `active_strategy` | config_id, promoted_from_run, capital_usd, min_order_usd, activated_at | One row: what drives suggestions |
 | `backtest_runs` | id, config_id, start, end, split, costs_json, execution, data_as_of, code_sha, status, timestamps, error | One per submitted job; a sweep is one run per grid point |
 | `backtest_results` | run_id, stats_by_period_json, annual_json, cost_sensitivity_json, equity_path | Equity curve stored as a parquet file beside the database |
 | `targets` | date, config_id, symbol, weight, score | Every strategy's target after each close |
@@ -111,7 +111,7 @@ The current CSV ledger (`data/portfolio/trades.csv`) is imported once into `fill
 
 P&L is recomputed from the fills, cash flows and raw closes, never stored as a running total, so a corrected fill fixes every number after it. The engine is pure Python in `live.portfolio`, with no database code, so it can be tested against hand-worked fixtures.
 
-- **Lots:** first-in, first-out, matching how US brokers report cost basis. Realized P&L on a sell = proceeds − FIFO cost of the lots closed − fees. The current code uses average cost; the switch is listed under open decisions.
+- **Lots:** first-in, first-out, matching how US brokers report cost basis. Realized P&L on a sell = proceeds − FIFO cost of the lots closed − fees. The current code uses average cost and switches to FIFO in M1.
 - **Splits:** on the ex-date, each open lot's quantity is multiplied by the ratio and its cost per share divided by it; total cost is unchanged.
 - **Dividends:** credited as cash on the pay date (shares held on the ex-date × amount) and counted as income.
 - **Unrealized P&L:** Σ (raw close − cost per share) × remaining quantity, over open lots.
@@ -126,7 +126,7 @@ Daily P&L removes the effect of money you add or take out, and the time-weighted
 where E is equity at the close and F is net external cash flow on that day.
 
 - **Benchmark:** QQQ's total return over the same sessions; the dashboard shows the gap.
-- **Without cash records**, return on invested capital is still shown, but time-weighted return needs deposits and withdrawals (open decision).
+- **Cash is tracked**, you record deposits and withdrawals, so equity and time-weighted return are always complete.
 - **Checks:** realized + unrealized + dividends − account fees = equity − net deposits, asserted on every snapshot (trade fees are already inside cost basis and proceeds); golden ledgers with known answers in the test suite.
 
 ## Active strategy and suggested actions
@@ -137,7 +137,7 @@ Suggested orders are the difference between the active strategy's target, in sha
 
 - Target weights from `live.signals` for the pinned config (the same code the backtests run).
 - Your holdings tagged to the active strategy, from the lots. Positions tagged `manual` or another strategy are never touched.
-- Capital: a fixed dollar amount, or a percentage of portfolio equity (open decision).
+- Capital: a fixed dollar amount you set; it changes only when you change it.
 - Reference price: that session's close. The order is for the next open, so the fill will differ.
 
 **Sizing rules**
@@ -146,7 +146,7 @@ Suggested orders are the difference between the active strategy's target, in sha
 2. Target shares = floor(weight × capital ÷ close), or fractional if your broker supports it.
 3. Order quantity = target shares − held shares; sells are listed before buys.
 4. Orders below a minimum value (default $100) are skipped, so drift doesn't create tiny trades.
-5. When cash is tracked and buys exceed it, all buys are scaled down by the same factor.
+5. When buys exceed available cash, all buys are scaled down by the same factor.
 6. If price data is stale or failed validation, no suggestions are produced and Today says why.
 
 **What each suggestion carries:** action, symbol, quantity, reference price, target weight, and a reason from the strategy's score (for example "SELL: fell below its 200-day average, −3.8%" or "BUY: enters the top 20% on 12-1 return, +45%").
@@ -220,11 +220,11 @@ Seven pages share one navigation bar and the existing look (light and dark theme
 | Backtests | Run list with status; run detail (the current comparison page); side-by-side comparison | Submit a run or grid; promote a run |
 | Signals | Every strategy's targets and changes for any recent session (the current signals page) | Browse past sessions |
 | Screener | Screener table, filters and indicator charts (the current screener page) | Keep a watchlist, now stored in the database |
-| Settings and jobs | Capital mode, minimum order, fractional shares, schedule time, notifications; job history with logs | Run a job, read a failure |
+| Settings and jobs | Capital (fixed dollars), minimum order, fractional shares, schedule time, notifications; job history with logs | Run a job, read a failure |
 
 ## Non-functional
 
-The default is a private app on your Mac, reachable only from that machine. Everything below that changes if it is hosted is marked.
+Decided: a private app on your Mac, reachable only from that machine. Notes on hosting are kept below for later.
 
 - **Hosting:** launchd keeps `tradelab serve`, `tradelab worker` and the scheduler running and restarts them after a crash or reboot. The server binds to 127.0.0.1. Phone access, if wanted, goes through a private network such as Tailscale rather than an open port. Hosted alternative: one small container with a persistent volume for the database.
 - **Authentication:** none on localhost. If hosted: a single-user login (argon2-hashed password, session cookie), HTTPS only, CSRF protection on forms.
@@ -257,18 +257,40 @@ The portfolio comes first, because accurate P&L is useful on its own and every l
 
 Each milestone ships something usable: M1 replaces the CSV ledger, M2 the static signals page, M3 the hand-run backtest report.
 
-## Open decisions
+## Decisions
 
-These change the build; each has a recommendation, and the choice of strategy is yours alone.
+Four were decided on 2026-10-11 and are marked Decided; the rest keep a recommendation, and the choice of strategy is yours alone.
 
 | Decision | Options | Recommendation |
 | --- | --- | --- |
-| Where it runs | Your Mac only; Mac + phone over Tailscale; a hosted container | Mac only to start; add Tailscale when you want it on your phone |
-| Cost basis method | FIFO; average cost | FIFO, to match broker statements and tax lots |
-| Track cash | Deposits, withdrawals and cash balance; positions only | Track cash: true returns and buy scaling both need it |
-| Capital for sizing | A fixed dollar amount; a percentage of equity | A fixed amount to start, so the strategy's size changes only when you change it |
+| Where it runs | Your Mac only; Mac + phone over Tailscale; a hosted container | Decided: your Mac only for now; add Tailscale when you want it on your phone |
+| Cost basis method | FIFO; average cost | Decided: FIFO, to match broker statements and tax lots |
+| Track cash | Deposits, withdrawals and cash balance; positions only | Decided: track cash, since true returns and buy scaling both need it |
+| Capital for sizing | A fixed dollar amount; a percentage of equity | Decided: a fixed dollar amount, so the strategy's size changes only when you change it |
 | Which strategy to activate | Any registered long-only strategy | Your choice, made from a backtest run's out-of-sample and cost-stressed results |
 | Long-short strategies | Excluded; allowed with shorting | Excluded in version 1 |
 | Fractional shares | Yes; no | Whatever your broker supports |
 | Notifications | None; email; a Claude scheduled summary | None until the daily job has run reliably for a while |
 | Backtest data snapshots | None; on promote only; every run | On promote only |
+
+## Implementation notes
+
+Phase 1 (M1 to M4) was built on 2026-10-11 and runs on the Mac as three launchd services
+(`tradelab service install`: web app on 127.0.0.1:8000, backtest worker, scheduler). Where the build
+differs from the design above:
+
+| Design | As built | Why |
+| --- | --- | --- |
+| Dividends credited on the pay date | Credited on the ex-date | Yahoo publishes ex-dates and amounts but no pay dates |
+| Raw closes straight from Yahoo | Yahoo's "unadjusted" closes and dividends are split-adjusted; the build multiplies back later splits | Verified on NVDA: $1,208.88 before its 10:1 split, not $120.89 |
+| A stored `lots` table | Lots are recomputed from fills on every read | Cheap, and always consistent with the ledger |
+| Pages read stored snapshots | Pages recompute P&L on request; the daily job still stores `portfolio_snapshots` as a dated record | A corrected fill shows up immediately |
+| One-off import of the CSV ledger | Not built | The CSV ledger never held a trade |
+| HTMX for forms | Plain JavaScript `fetch` against the API | No extra dependency; same behaviour |
+| Suggestions on rebalance days plus daily exits | Rebalance days resize everything; other days suggest membership changes only (a target name you don't hold, a holding no longer targeted) | Fixes mid-period activation and missed orders without trading on drift |
+| Data snapshot on promote | Not built yet | Still an open decision |
+| Notifications | None | As recommended until the daily job has run reliably |
+
+Also added beyond the design: a `--db` option on every command, a long-only guard on promotion, a
+stale-data guard that blocks suggestions, and an API health endpoint used by the Settings page.
+

@@ -41,6 +41,7 @@ section.card + .grid { margin-top: 16px; }
 </style>
 </head>
 <body>
+<!--__NAV__-->
 <div class="wrap">
   <header>
     <h1>Strategy Signals</h1>
@@ -93,11 +94,9 @@ const D = null /*__DATA__*/;
 const ST = D.strategies;
 const state = { day: D.dates.length - 1, cap: store.get("sig.cap", null) };
 const REB = { D: "Daily", W: "Weekly", M: "Monthly", Q: "Quarterly" };
-const UP = new Set(["BUY", "ADD", "COVER"]), DOWN = new Set(["SELL", "TRIM", "SHORT"]);
 const ORDER = { BUY: 0, SHORT: 1, FLIP: 2, SELL: 3, COVER: 4, ADD: 5, TRIM: 6 };
 
 const dayLabel = (s) => new Date(s + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" });
-const actBadge = (a) => `<span class="act ${UP.has(a) ? "up" : DOWN.has(a) ? "down" : ""}">${a}</span>`;
 const wfmt = (v) => v == null ? "–" : (v <= -0.0005 ? MINUS : "") + f1.format(Math.abs(v) * 100) + "%";  // no "−0.0%"
 function scoreFmt(unit, v) {
   if (v == null) return "–";
@@ -175,7 +174,7 @@ function renderPortfolio(day) {
   $("#pfHint").innerHTML = `ledger <code>${esc(P.ledger)}</code> · signals for the selected close`;
   if (!P.positions.length) {
     $("#portfolio").innerHTML = `<div class="cards-empty">No trades recorded yet. Tell Claude what you bought (for example
-      "bought 10 NVDA at 229.50 following rsi2"), or run<br><code>python -m tradelab.portfolio add BUY NVDA 10 229.50 --strategy rsi2_reversion</code></div>` + recentTrades();
+      "bought 10 NVDA at 229.50 following rsi2"), use the <a href="/portfolio">Portfolio</a> page, or run<br><code>tradelab portfolio add BUY NVDA 10 229.50 --strategy rsi2_reversion</code></div>` + recentTrades();
     return;
   }
   const cost = P.positions.reduce((a, r) => a + r.cost, 0);
@@ -258,7 +257,7 @@ function init() {
   const m = D.meta;
   $("#meta").textContent = `${m.universe} stocks · data through ${m.as_of} · built ${m.built}`;
   if (m.stale) $("#banner").innerHTML = `<div class="banner" role="alert"><b>Data is stale.</b> Prices end ${dayLabel(m.as_of)}, but ${dayLabel(m.expected)} has already closed. ` +
-    `Run <code>python -m tradelab.fetch</code> then <code>python -m tradelab.signals</code>.</div>`;
+    `Run the daily job (<a href="/settings">Settings and jobs</a>) or <code>tradelab daily</code>.</div>`;
   $("#day").innerHTML = D.dates.map((d) => `<option value="${d}">${dayLabel(d)}</option>`).reverse().join("");
   $("#day").addEventListener("change", (e) => { state.day = D.dates.indexOf(e.target.value); render(); });
   $("#prev").addEventListener("click", () => { state.day = Math.max(0, state.day - 1); render(); });

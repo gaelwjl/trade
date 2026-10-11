@@ -1,4 +1,5 @@
 """Performance statistics from a daily return series."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -12,7 +13,9 @@ def drawdown(returns: pd.Series) -> pd.Series:
     return eq / eq.cummax() - 1
 
 
-def summarize(returns: pd.Series, benchmark: pd.Series | None = None, rf: float = 0.0) -> dict[str, float]:
+def summarize(
+    returns: pd.Series, benchmark: pd.Series | None = None, rf: float = 0.0
+) -> dict[str, float]:
     """Annualised stats. ``rf`` is an annual risk-free rate used for Sharpe/Sortino."""
     r = returns.dropna()
     if len(r) < 2:

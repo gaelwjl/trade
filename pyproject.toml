@@ -5,12 +5,15 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "tradelab"
 version = "0.1.0"
-description = "Nasdaq-100 data + low/mid-frequency backtesting framework"
+description = "Local web app for Nasdaq-100 research: portfolio P&L, batch backtests, daily strategy signals"
 requires-python = ">=3.11"
-dependencies = ["yfinance", "pandas", "numpy", "pyarrow", "matplotlib", "requests", "plotly"]
+dependencies = [
+    "yfinance", "pandas", "numpy", "pyarrow", "matplotlib", "requests", "plotly",
+    "fastapi", "uvicorn>=0.30", "sqlalchemy>=2.0", "alembic", "apscheduler>=3.10,<4",
+]
 
 [project.optional-dependencies]
-dev = ["pytest", "mypy", "pandas-stubs"]
+dev = ["pytest", "mypy", "pandas-stubs", "black==26.1.0", "httpx"]
 
 [project.scripts]
 tradelab = "tradelab.cli:main"
@@ -19,8 +22,17 @@ tradelab = "tradelab.cli:main"
 include = ["tradelab*"]  # data/ and reports/ are runtime output, not packages
 
 [tool.setuptools.package-data]
-"tradelab.dashboard" = ["templates/*"]
+"tradelab.web" = ["templates/*"]
+"tradelab.store" = ["migrations/*.py", "migrations/*.mako", "migrations/versions/*.py"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+filterwarnings = [
+    # third-party: FastAPI's TestClient still uses httpx
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated",
+]
+
+[tool.black]
+# Same formatter and version as the VS Code Black extension (format on save): keep diffs clean.
+line-length = 88

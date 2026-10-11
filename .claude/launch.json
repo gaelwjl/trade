@@ -4,8 +4,21 @@
     {
       "name": "reports",
       "runtimeExecutable": ".venv/bin/python",
-      "runtimeArgs": ["-m", "http.server", "8765", "--bind", "127.0.0.1", "--directory", "reports"],
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8765",
+        "--bind",
+        "127.0.0.1",
+        "--directory",
+        "reports"
+      ],
       "port": 8765
+    },
+    {
+      "name": "app",
+      "url": "http://127.0.0.1:8000",
+      "port": 8000
     }
   ]
 }

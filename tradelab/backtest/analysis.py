@@ -1,4 +1,5 @@
 """Backtest analytics beyond one stats row: sub-periods, calendar years, rolling windows, cost sensitivity."""
+
 from __future__ import annotations
 
 import math
@@ -13,7 +14,19 @@ from .engine import CostModel, Result
 from .metrics import TRADING_DAYS
 from .runner import run_suite
 
-STAT_KEYS = ["CAGR", "Vol", "Sharpe", "Sortino", "MaxDD", "Calmar", "Beta", "Alpha", "Turnover/yr", "CostDrag/yr", "AvgExposure"]
+STAT_KEYS = [
+    "CAGR",
+    "Vol",
+    "Sharpe",
+    "Sortino",
+    "MaxDD",
+    "Calmar",
+    "Beta",
+    "Alpha",
+    "Turnover/yr",
+    "CostDrag/yr",
+    "AvgExposure",
+]
 
 
 @dataclass(frozen=True)
@@ -24,7 +37,9 @@ class Period:
     end: str | None  # exclusive
 
 
-def standard_periods(first: pd.Timestamp, last: pd.Timestamp, split: str) -> list[Period]:
+def standard_periods(
+    first: pd.Timestamp, last: pd.Timestamp, split: str
+) -> list[Period]:
     """Full history, in-sample (before ``split``), out-of-sample (from ``split``) and the last five years."""
     s = pd.Timestamp(split)
     five = (last - pd.DateOffset(years=5)).normalize()
@@ -36,11 +51,16 @@ def standard_periods(first: pd.Timestamp, last: pd.Timestamp, split: str) -> lis
     ]
 
 
-def period_stats(results: dict[str, Result], period: Period, benchmark: str = "QQQ") -> StatsTable:
+def period_stats(
+    results: dict[str, Result], period: Period, benchmark: str = "QQQ"
+) -> StatsTable:
     """One row per series, ``STAT_KEYS`` columns, computed on the period only (betas vs ``benchmark``)."""
     cut = {k: r.between(period.start, period.end) for k, r in results.items()}
     bench = cut[benchmark].returns
-    rows = {k: {s: v for s, v in r.stats(bench).items() if s in STAT_KEYS} for k, r in cut.items()}
+    rows = {
+        k: {s: v for s, v in r.stats(bench).items() if s in STAT_KEYS}
+        for k, r in cut.items()
+    }
     return StatsTable(pd.DataFrame(rows).T.reindex(columns=STAT_KEYS))
 
 
@@ -49,24 +69,56 @@ def annual_returns(returns: pd.Series) -> pd.Series:
     return (1 + returns).groupby(pd.DatetimeIndex(returns.index).year).prod() - 1
 
 
-def rolling_return(result: Result, window: int = TRADING_DAYS) -> pd.Series:
-    eq = result.equity
-    return eq / eq.shift(window) - 1
+def rolling_return(equity: pd.Series, window: int = TRADING_DAYS) -> pd.Series:
+    return equity / equity.shift(window) - 1
 
 
-def rolling_sharpe(result: Result, window: int = TRADING_DAYS) -> pd.Series:
-    roll = result.returns.rolling(window, min_periods=window)
+def rolling_sharpe(returns: pd.Series, window: int = TRADING_DAYS) -> pd.Series:
+    roll = returns.rolling(window, min_periods=window)
     return roll.mean() / roll.std() * np.sqrt(TRADING_DAYS)
 
 
-def cost_sensitivity(panel: Panel, levels_bps: list[float], base: CostModel, base_results: dict[str, Result],
-                     start: str | None, execution: str) -> dict[float, StatsTable]:
+def run_period_stats(
+    result: Result, benchmark: Result, periods: list[Period]
+) -> dict[str, dict[str, float]]:
+    """``STAT_KEYS`` stats of one result for each period, betas vs ``benchmark``."""
+    out = {}
+    for p in periods:
+        r, b = result.between(p.start, p.end), benchmark.between(p.start, p.end)
+        out[p.key] = {k: v for k, v in r.stats(b.returns).items() if k in STAT_KEYS}
+    return out
+
+
+def cost_sensitivity(
+    panel: Panel,
+    levels_bps: list[float],
+    base: CostModel,
+    base_results: dict[str, Result],
+    start: str | None,
+    execution: str,
+) -> dict[float, StatsTable]:
     """Full-period CAGR and Sharpe of the whole suite at each one-way cost level (bps)."""
     out = {}
     for bps in levels_bps:
-        alt = base_results if math.isclose(bps, base.one_way * 1e4) else run_suite(
-            panel, start=start, costs=CostModel(commission_bps=0.0, slippage_bps=bps, borrow_bps=base.borrow_bps),
-            execution=execution)
+        alt = (
+            base_results
+            if math.isclose(bps, base.one_way * 1e4)
+            else run_suite(
+                panel,
+                start=start,
+                costs=CostModel(
+                    commission_bps=0.0, slippage_bps=bps, borrow_bps=base.borrow_bps
+                ),
+                execution=execution,
+            )
+        )
         bench = alt["QQQ"].returns
-        out[bps] = StatsTable(pd.DataFrame({k: {s: r.stats(bench).get(s) for s in ("CAGR", "Sharpe")} for k, r in alt.items()}).T)
+        out[bps] = StatsTable(
+            pd.DataFrame(
+                {
+                    k: {s: r.stats(bench).get(s) for s in ("CAGR", "Sharpe")}
+                    for k, r in alt.items()
+                }
+            ).T
+        )
     return out

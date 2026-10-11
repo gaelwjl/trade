@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Active Strategy</title>
+<style>
+/*__CSS__*/
+dl.facts { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0; padding: 12px; }
+dl.facts dt { color: var(--ink2); }
+dl.facts dd { margin: 0; }
+</style>
+</head>
+<body>
+<!--__NAV__-->
+<div class="wrap">
+  <header>
+    <h1>Active strategy</h1>
+    <span class="sub" id="meta"></span>
+    <span class="spacer"></span>
+    <button id="theme" title="Toggle light / dark">Theme</button>
+  </header>
+  <div id="body"></div>
+</div>
+
+<script>/*__PLOTLY__*/</script>
+<script>
+"use strict";
+const D = null /*__DATA__*/;
+/*__COMMON_JS__*/
+
+let S = null;
+const scoreFmt = (unit, v) => v == null ? "–" : unit === "level" ? f1.format(v) : unit === "vol" ? pctPlain(v) : pct(v);
+const REB = { D: "every session", W: "last session of each week", M: "last session of each month", Q: "last session of each quarter" };
+
+function render() {
+  if (!S.active) {
+    $("#meta").textContent = "";
+    $("#body").innerHTML = `<div class="notice">No active strategy. Pick a backtest run on the <a href="/backtests">Backtests</a> page and promote it; it then drives the daily suggested orders.</div>`;
+    return;
+  }
+  const a = S.active;
+  $("#meta").textContent = `${a.label} · active since ${a.activated_at}`;
+  const facts = [
+    ["Strategy", esc(a.label)], ["Rule", esc(a.description)], ["Rebalances", REB[a.rebalance] || esc(a.rebalance)],
+    ["Last signal", `${esc(S.signal_date || "–")}${S.is_rebalance ? " (rebalance day)" : ""}`],
+    ["Next rebalance", `after the close of ${esc(S.next_rebalance || "–")}`],
+    ["Promoted from", a.promoted_from_run ? `<a href="/backtests/compare?ids=${a.promoted_from_run}">backtest run #${a.promoted_from_run}</a>` : "–"],
+    ["Code version", `<code>${esc(a.code_sha || "–")}</code>`],
+    ["Adherence", S.adherence.share == null ? "no decided suggestions yet" : `${pctPlain(S.adherence.share)} acted on (${S.adherence.acted} of ${S.adherence.decided})`],
+  ];
+  $("#body").innerHTML = `<div class="grid2">
+    <section class="card" aria-label="Details"><div class="card-head"><h2>Details</h2></div>
+      <dl class="facts">${facts.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl></section>
+    <section class="card" aria-label="Sizing"><div class="card-head"><h2>Sizing</h2><span class="hint">applies from the next daily run</span></div>
+      <form class="inline" id="sizing">
+        <label>Capital ($)<input type="number" name="capital_usd" step="any" min="1" value="${a.capital_usd}"></label>
+        <label>Minimum order ($)<input type="number" name="min_order_usd" step="any" min="0" value="${a.min_order_usd}"></label>
+        <label><span>Fractional shares</span><input type="checkbox" name="fractional" ${a.fractional ? "checked" : ""}></label>
+        <button class="primary" type="submit">Save sizing</button>
+        <button class="danger" type="button" id="deactivate">Deactivate</button>
+      </form></section></div>
+    <section class="card" aria-label="Paper against real"><div class="card-head"><h2>Paper strategy against your real portfolio</h2>
+      <span class="hint">paper = the strategy followed exactly at backtest assumptions from activation; the gap is slippage, skipped orders and timing</span></div>
+      <div id="paper" class="chart"></div></section>
+    <section class="card" aria-label="Target"><div class="card-head"><h2>Target after the last close</h2><span class="hint">${S.target.length} names</span></div>
+      <div class="tablewrap">${!S.target.length ? `<div class="pad muted">No stored target yet: run the daily job.</div>` :
+        `<table><thead><tr><th class="l">Symbol</th><th>Weight</th><th>Target $</th><th>${esc(a.score_label)}</th><th>You hold</th></tr></thead><tbody>` +
+        S.target.map((t) => `<tr><td class="sym">${esc(t.symbol)}</td><td>${pctPlain(t.weight)}</td><td>${usd(t.weight * a.capital_usd)}</td>` +
+          `<td>${scoreFmt(a.score_unit, t.score)}</td><td>${t.held ? qtyFmt(t.held) : '<span class="hint">–</span>'}</td></tr>`).join("") + "</tbody></table>"}</div></section>`;
+  if (S.paper.dates.length || S.real.dates.length) {
+    Plotly.react("paper", [
+      lineTrace("Paper strategy", S.paper.dates, S.paper.equity, css("--c1"), { hovertemplate: "$%{y:,.0f}" }),
+      lineTrace("Your portfolio", S.real.dates, S.real.equity, css("--c2"), { hovertemplate: "$%{y:,.0f}" }),
+    ], chartLayout("$,.0f"), PLOT_CONFIG);
+  } else {
+    $("#paper").innerHTML = `<div class="pad muted">Appears after the first session following activation.</div>`;
+  }
+  $("#sizing").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    try { await api("/api/active-strategy", { method: "PUT", body: formJson(e.target) }); toast("Sizing saved"); await load(); } catch (err) { toast(err.message); }
+  });
+  $("#deactivate").addEventListener("click", async () => {
+    if (!confirm("Deactivate? Daily suggestions stop until you promote a strategy again.")) return;
+    try { await api("/api/active-strategy", { method: "DELETE" }); await load(); } catch (err) { toast(err.message); }
+  });
+}
+async function load() { S = await api("/api/strategy"); render(); }
+initTheme(render);
+load().catch((err) => toast(err.message));
+</script>
+</body>
+</html>

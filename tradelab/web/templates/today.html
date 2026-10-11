@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Today</title>
+<style>
+/*__CSS__*/
+td.reason { white-space: normal; text-align: left; min-width: 240px; color: var(--ink2); }
+tr.fillrow td { background: var(--hover); }
+</style>
+</head>
+<body>
+<!--__NAV__-->
+<div class="wrap">
+  <header>
+    <h1>Today</h1>
+    <span class="sub" id="meta"></span>
+    <span class="spacer"></span>
+    <button id="runDaily" title="Fetch prices, recompute every strategy, refresh suggestions">Run daily job</button>
+    <button id="theme" title="Toggle light / dark">Theme</button>
+  </header>
+  <div id="alerts"></div>
+  <div class="kpis-row" id="kpis"></div>
+
+  <section class="card" aria-label="Suggested orders">
+    <div class="card-head"><h2 id="sugTitle">Suggested orders</h2><span class="hint" id="sugHint"></span></div>
+    <div class="tablewrap" id="sugs"></div>
+  </section>
+
+  <section class="card" aria-label="Return against QQQ">
+    <div class="card-head"><h2>Return since your first record</h2><span class="hint">time-weighted, so deposits and withdrawals don't count as gains</span></div>
+    <div id="perf" class="chart"></div>
+  </section>
+
+  <p class="note">Suggested orders are the mechanical output of the strategy you activated, priced at the last close and meant for the next open.
+    They are not investment advice; you decide and place every order yourself.</p>
+</div>
+
+<script>/*__PLOTLY__*/</script>
+<script>
+"use strict";
+const D = null /*__DATA__*/;
+/*__COMMON_JS__*/
+
+let T = null, H = null;
+const editing = new Set();
+
+function renderAlerts() {
+  $("#alerts").innerHTML = T.alerts.map((a) => `<div class="alert" role="alert">${esc(a)}</div>`).join("");
+}
+function renderKpis() {
+  const t = T.totals;
+  if (t.equity === 0 && !t.as_of) {
+    $("#kpis").innerHTML = `<div class="notice">No trades or cash recorded yet. Start on the <a href="/portfolio">Portfolio</a> page: record your deposit, then your fills.</div>`;
+    return;
+  }
+  $("#kpis").innerHTML =
+    kpi("Equity", usd(t.equity), `as of ${esc(t.as_of || "–")}`) +
+    kpi("Day P&amp;L", signedUsd(t.day_pnl)) +
+    kpi("Total P&amp;L", signedUsd(t.total_pnl), `on ${usd(t.deposits)} net deposits`) +
+    kpi("Return", pct(t.twr), t.qqq == null ? "" : `QQQ ${pct(t.qqq)}`) +
+    kpi("Cash", usd(t.cash), `positions ${usd(t.market_value)}`);
+}
+function renderSuggestions() {
+  const a = T.active;
+  if (!a) {
+    $("#sugTitle").textContent = "Suggested orders";
+    $("#sugHint").textContent = "";
+    $("#sugs").innerHTML = `<div class="pad muted">No active strategy. Promote a backtest run on the <a href="/backtests">Backtests</a> page to get daily suggestions.</div>`;
+    return;
+  }
+  const forSession = T.suggestions.length ? T.suggestions[0].for_session : null;
+  $("#sugTitle").textContent = forSession ? `Suggested orders for the open of ${forSession}` : "Suggested orders";
+  $("#sugHint").textContent = `${a.label} · capital ${usd(a.capital_usd)} · ` +
+    (a.is_rebalance ? "rebalance day" : `next rebalance after the close of ${a.next_rebalance || "–"}`);
+  if (!T.suggestions.length) {
+    $("#sugs").innerHTML = `<div class="pad muted">No orders: your holdings already match the target${T.signal_date ? ` after the close of ${esc(T.signal_date)}` : ""}.</div>`;
+    return;
+  }
+  $("#sugs").innerHTML = `<table><thead><tr><th class="l">Action</th><th class="l">Symbol</th><th>Qty</th><th>Ref. price</th><th>Value</th>` +
+    `<th class="l">Reason</th><th class="l">Status</th><th></th></tr></thead><tbody>` +
+    T.suggestions.map((r) => {
+      const open = r.status === "open" || r.status === "partial";
+      const row = `<tr><td class="l">${actBadge(r.action)}</td><td class="sym">${esc(r.symbol)}</td><td>${qtyFmt(r.qty)}</td>` +
+        `<td>${usd(r.ref_price)}</td><td>${usd(r.qty * r.ref_price)}</td><td class="reason">${esc(r.reason)}</td>` +
+        `<td class="l status">${esc(r.status)}${r.filled_qty ? ` (${qtyFmt(r.filled_qty)} filled)` : ""}</td>` +
+        `<td class="l">${open ? `<button data-fill="${r.id}">Record fill</button> <button data-dismiss="${r.id}">Dismiss</button>` : ""}</td></tr>`;
+      if (!editing.has(r.id)) return row;
+      return row + `<tr class="fillrow"><td colspan="8"><form class="inline" data-form="${r.id}">` +
+        `<label>Date<input type="date" name="trade_date" value="${esc(r.for_session)}" required></label>` +
+        `<label>Quantity<input type="number" name="qty" step="any" min="0" value="${r.qty - r.filled_qty}" required></label>` +
+        `<label>Price<input type="number" name="price" step="any" min="0" value="${r.ref_price}" required></label>` +
+        `<label>Fees<input type="number" name="fees" step="any" min="0" value="0"></label>` +
+        `<label>Note<input type="text" name="note"></label>` +
+        `<button class="primary" type="submit">Save ${esc(r.side.toLowerCase())}</button> <button type="button" data-cancel="${r.id}">Cancel</button></form></td></tr>`;
+    }).join("") + "</tbody></table>";
+}
+function renderChart() {
+  if (!H || !H.dates.length) { $("#perf").innerHTML = `<div class="pad muted">The chart appears once you have recorded trades and the daily job has priced them.</div>`; return; }
+  Plotly.react("perf", [
+    lineTrace("Your portfolio", H.dates, H.twr, css("--c1"), { hovertemplate: "%{y:.1%}" }),
+    lineTrace("QQQ", H.dates, H.qqq, css("--ink"), { line: { color: css("--ink"), width: 1.6, dash: "dash" }, hovertemplate: "%{y:.1%}" }),
+  ], chartLayout(".0%"), PLOT_CONFIG);
+}
+function render() {
+  $("#meta").textContent = `prices through ${T.data_last_date || "–"}` + (T.last_job ? ` · last daily job ${T.last_job.status} (${T.last_job.session_date || "–"})` : "");
+  renderAlerts(); renderKpis(); renderSuggestions(); renderChart();
+}
+async function load() {
+  [T, H] = await Promise.all([api("/api/today"), api("/api/portfolio/history")]);
+  render();
+}
+
+$("#sugs").addEventListener("click", async (e) => {
+  const f = e.target.closest("[data-fill]"), d = e.target.closest("[data-dismiss]"), c = e.target.closest("[data-cancel]");
+  if (f) { editing.add(+f.dataset.fill); renderSuggestions(); return; }
+  if (c) { editing.delete(+c.dataset.cancel); renderSuggestions(); return; }
+  if (d) {
+    try { await api(`/api/suggestions/${d.dataset.dismiss}/dismiss`, { method: "POST" }); await load(); } catch (err) { toast(err.message); }
+  }
+});
+$("#sugs").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const id = +e.target.dataset.form;
+  try {
+    await api(`/api/suggestions/${id}/fill`, { method: "POST", body: formJson(e.target) });
+    editing.delete(id); toast("Fill recorded"); await load();
+  } catch (err) { toast(err.message); }
+});
+$("#runDaily").addEventListener("click", async () => {
+  try { await api("/api/jobs/daily", { method: "POST", body: { fetch: true } }); toast("Daily job started; this page refreshes when it finishes.", 6000); pollJob(); }
+  catch (err) { toast(err.message); }
+});
+async function pollJob() {
+  $("#runDaily").disabled = true;
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 3000));
+    const h = await api("/api/health");
+    if (!h.daily_running) break;
+  }
+  $("#runDaily").disabled = false;
+  await load();
+  toast(T.last_job ? `Daily job ${T.last_job.status}` : "Daily job finished");
+}
+initTheme(render);
+load().catch((err) => toast(err.message));
+</script>
+</body>
+</html>

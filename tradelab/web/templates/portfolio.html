@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Portfolio</title>
+<style>
+/*__CSS__*/
+#dd { height: 200px; }
+</style>
+</head>
+<body>
+<!--__NAV__-->
+<div class="wrap">
+  <header>
+    <h1>Portfolio</h1>
+    <span class="sub" id="meta"></span>
+    <span class="spacer"></span>
+    <button id="theme" title="Toggle light / dark">Theme</button>
+  </header>
+  <div id="alerts"></div>
+  <div class="kpis-row" id="kpis"></div>
+
+  <section class="card" aria-label="Positions">
+    <div class="card-head"><h2>Positions</h2><span class="hint">FIFO cost basis · valued at the last raw close</span></div>
+    <div class="tablewrap" id="positions"></div>
+    <details><summary>Open lots</summary><div class="tablewrap" id="lots"></div></details>
+    <details><summary>Realized trades</summary><div class="tablewrap" id="realized"></div></details>
+  </section>
+
+  <section class="card" aria-label="Return history">
+    <div class="card-head"><h2>Return against QQQ</h2><span class="hint">time-weighted return; deposits and withdrawals excluded</span></div>
+    <div id="perf" class="chart"></div>
+    <div class="card-head"><h2>Drawdown</h2><span class="hint">% below the previous peak of your return</span></div>
+    <div id="dd" class="chart"></div>
+  </section>
+
+  <div class="grid2">
+    <section class="card" aria-label="Record a fill">
+      <div class="card-head"><h2>Record a fill</h2><span class="hint">a sell larger than your holding is rejected</span></div>
+      <form class="inline" id="fillForm">
+        <label>Date<input type="date" name="trade_date" required></label>
+        <label>Side<select name="side"><option>BUY</option><option>SELL</option></select></label>
+        <label>Symbol<input type="text" name="symbol" size="7" required></label>
+        <label>Quantity<input type="number" name="qty" step="any" min="0" required></label>
+        <label>Price<input type="number" name="price" step="any" min="0" required></label>
+        <label>Fees<input type="number" name="fees" step="any" min="0" value="0"></label>
+        <label>Strategy<select name="strategy" id="stratSel"><option value="">none</option></select></label>
+        <label>Note<input type="text" name="note"></label>
+        <button class="primary" type="submit">Save fill</button>
+      </form>
+    </section>
+    <section class="card" aria-label="Record cash">
+      <div class="card-head"><h2>Record cash</h2><span class="hint">deposits and withdrawals move money in and out; fees and interest count as P&amp;L</span></div>
+      <form class="inline" id="cashForm">
+        <label>Date<input type="date" name="date" required></label>
+        <label>Kind<select name="kind"><option>deposit</option><option>withdrawal</option><option>fee</option><option>interest</option></select></label>
+        <label>Amount ($)<input type="number" name="amount" step="any" min="0" required></label>
+        <label>Note<input type="text" name="note"></label>
+        <button class="primary" type="submit">Save</button>
+      </form>
+    </section>
+  </div>
+
+  <section class="card" aria-label="Fills">
+    <div class="card-head"><h2>Fills</h2><span class="hint">deleting keeps an audit record; corrections recompute everything after them</span></div>
+    <div class="tablewrap" id="fills"></div>
+  </section>
+  <section class="card" aria-label="Cash">
+    <div class="card-head"><h2>Cash flows</h2><span class="hint">dividends are added automatically from corporate actions</span></div>
+    <div class="tablewrap" id="cash"></div>
+  </section>
+</div>
+
+<script>/*__PLOTLY__*/</script>
+<script>
+"use strict";
+const D = null /*__DATA__*/;
+/*__COMMON_JS__*/
+
+let P = null, H = null, F = [], C = [];
+
+function renderTop() {
+  const t = P.totals;
+  $("#meta").textContent = t.as_of ? `valued at the close of ${t.as_of}` : "nothing recorded yet";
+  $("#alerts").innerHTML = P.missing_prices.length
+    ? `<div class="alert">No market price yet for ${esc(P.missing_prices.join(", "))}: valued at the last fill price until the daily job fetches it.</div>` : "";
+  $("#kpis").innerHTML = !t.as_of ? `<div class="notice">Start by recording the deposit that funds your account, then each fill.</div>` :
+    kpi("Equity", usd(t.equity), `cash ${usd(t.cash)}`) +
+    kpi("Total P&amp;L", signedUsd(t.total_pnl), `on ${usd(t.deposits)} net deposits`) +
+    kpi("Unrealized", signedUsd(t.unrealized)) +
+    kpi("Realized", signedUsd(t.realized), `dividends ${usd(t.dividends)}`) +
+    kpi("Return", pct(t.twr), t.qqq == null ? "" : `QQQ ${pct(t.qqq)}`);
+}
+function renderPositions() {
+  if (!P.positions.length) { $("#positions").innerHTML = `<div class="pad muted">No open positions.</div>`; $("#lots").innerHTML = ""; $("#realized").innerHTML = ""; return; }
+  $("#positions").innerHTML = `<table><thead><tr><th class="l">Symbol</th><th>Qty</th><th>Avg cost</th><th>Last</th><th>Value</th><th>P&amp;L</th><th>P&amp;L %</th><th>Weight</th><th class="l">Since</th><th class="l">Strategy</th></tr></thead><tbody>` +
+    P.positions.map((r) => `<tr><td class="sym">${esc(r.symbol)}</td><td>${qtyFmt(r.qty)}</td><td>${usd(r.avg_cost)}</td><td>${usd(r.last)}</td><td>${usd(r.value)}</td>` +
+      `<td style="${heatBg(r.pnl_pct, 0.25)}">${signedUsd(r.pnl)}</td><td style="${heatBg(r.pnl_pct, 0.25)}">${pct(r.pnl_pct)}</td><td>${pctPlain(r.weight)}</td>` +
+      `<td class="l">${esc(r.opened)}</td><td class="l">${esc(r.strategies) || '<span class="hint">untagged</span>'}</td></tr>`).join("") + "</tbody></table>";
+  $("#lots").innerHTML = `<table><thead><tr><th class="l">Symbol</th><th class="l">Opened</th><th>Qty</th><th>Cost / share</th><th class="l">Strategy</th></tr></thead><tbody>` +
+    P.lots.map((l) => `<tr><td class="sym">${esc(l.symbol)}</td><td class="l">${esc(l.open_date)}</td><td>${qtyFmt(l.qty)}</td><td>${usd(l.cost_per_share)}</td><td class="l">${esc(l.strategy)}</td></tr>`).join("") + "</tbody></table>";
+  $("#realized").innerHTML = !P.realized.length ? `<div class="pad muted">No sells yet.</div>` :
+    `<table><thead><tr><th class="l">Date</th><th class="l">Symbol</th><th>Qty</th><th>Proceeds</th><th>FIFO cost</th><th>P&amp;L</th><th class="l">Strategy</th></tr></thead><tbody>` +
+    P.realized.map((r) => `<tr><td class="l">${esc(r.date)}</td><td class="sym">${esc(r.symbol)}</td><td>${qtyFmt(r.qty)}</td><td>${usd(r.proceeds)}</td><td>${usd(r.cost)}</td><td>${signedUsd(r.pnl)}</td><td class="l">${esc(r.strategy)}</td></tr>`).join("") + "</tbody></table>";
+}
+function renderCharts() {
+  if (!H.dates.length) { $("#perf").innerHTML = `<div class="pad muted">No history yet.</div>`; $("#dd").innerHTML = ""; return; }
+  Plotly.react("perf", [
+    lineTrace("Your portfolio", H.dates, H.twr, css("--c1"), { hovertemplate: "%{y:.1%}" }),
+    lineTrace("QQQ", H.dates, H.qqq, css("--ink"), { line: { color: css("--ink"), width: 1.6, dash: "dash" }, hovertemplate: "%{y:.1%}" }),
+  ], chartLayout(".0%"), PLOT_CONFIG);
+  Plotly.react("dd", [lineTrace("Drawdown", H.dates, H.drawdown, css("--c1"), { hovertemplate: "%{y:.1%}" })],
+    { ...chartLayout(".0%"), showlegend: false }, PLOT_CONFIG);
+}
+function renderLedgers() {
+  $("#fills").innerHTML = !F.length ? `<div class="pad muted">No fills yet.</div>` :
+    `<table><thead><tr><th class="l">Date</th><th class="l">Side</th><th class="l">Symbol</th><th>Qty</th><th>Price</th><th>Fees</th><th class="l">Strategy</th><th class="l">Note</th><th></th></tr></thead><tbody>` +
+    F.map((r) => `<tr><td class="l">${esc(r.trade_date)}</td><td class="l">${actBadge(r.side)}</td><td class="sym">${esc(r.symbol)}</td><td>${qtyFmt(r.qty)}</td><td>${usd(r.price)}</td><td>${usd(r.fees)}</td>` +
+      `<td class="l">${esc(r.strategy)}</td><td class="l">${esc(r.note)}</td><td><button class="danger" data-delfill="${r.id}">Delete</button></td></tr>`).join("") + "</tbody></table>";
+  $("#cash").innerHTML = !C.length ? `<div class="pad muted">No cash flows yet.</div>` :
+    `<table><thead><tr><th class="l">Date</th><th class="l">Kind</th><th>Amount</th><th class="l">Note</th><th></th></tr></thead><tbody>` +
+    C.map((r) => `<tr><td class="l">${esc(r.date)}</td><td class="l">${esc(r.kind)}</td><td>${usd(r.amount)}</td><td class="l">${esc(r.note)}</td><td><button class="danger" data-delcash="${r.id}">Delete</button></td></tr>`).join("") + "</tbody></table>";
+}
+function render() { renderTop(); renderPositions(); renderCharts(); renderLedgers(); }
+async function load() {
+  [P, H, F, C] = await Promise.all([api("/api/portfolio"), api("/api/portfolio/history"), api("/api/fills"), api("/api/cash")]);
+  render();
+}
+
+for (const el of document.querySelectorAll("input[type=date]")) el.value = todayIso();
+api("/api/strategies").then((list) => {
+  $("#stratSel").insertAdjacentHTML("beforeend", list.map((s) => `<option value="${esc(s.name)}">${esc(s.name)}</option>`).join("") + `<option value="manual">manual</option>`);
+});
+$("#fillForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  try { await api("/api/fills", { method: "POST", body: formJson(e.target) }); e.target.reset(); e.target.trade_date.value = todayIso(); toast("Fill saved"); await load(); }
+  catch (err) { toast(err.message); }
+});
+$("#cashForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  try { await api("/api/cash", { method: "POST", body: formJson(e.target) }); e.target.reset(); e.target.date.value = todayIso(); toast("Saved"); await load(); }
+  catch (err) { toast(err.message); }
+});
+document.addEventListener("click", async (e) => {
+  const f = e.target.closest("[data-delfill]"), c = e.target.closest("[data-delcash]");
+  if (!f && !c) return;
+  if (!confirm("Delete this record? It stays in the audit log.")) return;
+  try { await api(f ? `/api/fills/${f.dataset.delfill}` : `/api/cash/${c.dataset.delcash}`, { method: "DELETE" }); await load(); }
+  catch (err) { toast(err.message); }
+});
+initTheme(render);
+load().catch((err) => toast(err.message));
+</script>
+</body>
+</html>

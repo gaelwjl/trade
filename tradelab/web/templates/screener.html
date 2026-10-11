@@ -29,6 +29,7 @@ details table { margin-top: 8px; }
 </style>
 </head>
 <body>
+<!--__NAV__-->
 <div class="wrap">
   <header>
     <h1>Nasdaq-100 Screener</h1>
@@ -153,6 +154,7 @@ function setSort(k) {
 function toggleWatch(s) {
   watch.has(s) ? watch.delete(s) : watch.add(s);
   store.set("watch", [...watch]);
+  if (D.api) api("/api/watchlist", { method: "PUT", body: { symbols: [...watch] } }).catch((e) => toast(e.message));
   renderTable(); renderChartHead();
 }
 function select(s) {
@@ -267,6 +269,7 @@ function init() {
   if (first) select(first.symbol);
 }
 init();
+if (D.api) api("/api/watchlist").then((list) => { watch.clear(); list.forEach((x) => watch.add(x)); renderTable(); renderChartHead(); });
 </script>
 </body>
 </html>

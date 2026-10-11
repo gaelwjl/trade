@@ -91,3 +91,13 @@ def next_period_end(d: Date, rule: str) -> Date:
     while not is_period_end(s, rule):
         s = next_session(s)
     return s
+
+
+def sessions(start: Date, end: Date) -> list[Date]:
+    """Every NYSE session from ``start`` to ``end`` inclusive."""
+    out, d = [], start
+    while d <= end:
+        if is_session(d):
+            out.append(d)
+        d += dt.timedelta(days=1)
+    return out

@@ -5,12 +5,15 @@ import pytest
 from tradelab.backtest.engine import CostModel, backtest, rebalance_dates
 from tests.helpers import NO_COST, make_panel
 
+
 def test_buy_and_hold_matches_price_ratio():
     p = make_panel(names=["A"])
     w = pd.DataFrame(1.0, p.close.index, ["A"])
     r = backtest(p, w, rebalance="D", costs=NO_COST)
     # decision at close of day 0 fills at open of day 1; equity marked at opens
-    assert r.equity.iloc[-1] == pytest.approx(p.open["A"].iloc[-1] / p.open["A"].iloc[1])
+    assert r.equity.iloc[-1] == pytest.approx(
+        p.open["A"].iloc[-1] / p.open["A"].iloc[1]
+    )
 
 
 def test_single_entry_costs_exactly_one_way():
@@ -20,7 +23,9 @@ def test_single_entry_costs_exactly_one_way():
     free = backtest(p, w, rebalance="D", costs=NO_COST)
     paid = backtest(p, w, rebalance="D", costs=c)
     assert paid.equity.iloc[-1] / free.equity.iloc[-1] == pytest.approx(1 - 5e-4)
-    assert paid.turnover.sum() == pytest.approx(1.0)  # one entry, then daily rebalances trade nothing
+    assert paid.turnover.sum() == pytest.approx(
+        1.0
+    )  # one entry, then daily rebalances trade nothing
 
 
 def test_weights_drift_between_rebalances():
@@ -70,7 +75,12 @@ def test_start_makes_book_flat_until_start():
 def test_monthly_rebalance_dates_are_last_trading_day():
     idx = pd.bdate_range("2024-01-01", "2024-04-30")
     d = idx[rebalance_dates(idx, "M")]
-    assert list(d) == [pd.Timestamp("2024-01-31"), pd.Timestamp("2024-02-29"), pd.Timestamp("2024-03-29"), pd.Timestamp("2024-04-30")]
+    assert list(d) == [
+        pd.Timestamp("2024-01-31"),
+        pd.Timestamp("2024-02-29"),
+        pd.Timestamp("2024-03-29"),
+        pd.Timestamp("2024-04-30"),
+    ]
 
 
 def test_weight_row_t_first_affects_equity_two_bars_later():
@@ -83,7 +93,9 @@ def test_weight_row_t_first_affects_equity_two_bars_later():
     w.iloc[t] = [1.0, 0.0, 0.0]
     eq = backtest(p, w, rebalance="D", costs=NO_COST).equity
     d = p.close.index
-    assert eq[d[t]] == pytest.approx(base[d[t]]) and eq[d[t + 1]] == pytest.approx(base[d[t + 1]])
+    assert eq[d[t]] == pytest.approx(base[d[t]]) and eq[d[t + 1]] == pytest.approx(
+        base[d[t + 1]]
+    )
     assert eq[d[t + 2]] != pytest.approx(base[d[t + 2]])
     # a perturbed row must also change nothing before it, i.e. earlier equity is identical
     assert np.allclose(eq.loc[: d[t + 1]], base.loc[: d[t + 1]])
@@ -98,9 +110,16 @@ def test_weights_on_unknown_symbol_raise():
 
 def test_between_rebases_and_keeps_first_period_return():
     p = make_panel(n_days=300, n_names=3)
-    r = backtest(p, pd.DataFrame(1 / 3, p.close.index, p.close.columns), rebalance="M", costs=NO_COST)
+    r = backtest(
+        p,
+        pd.DataFrame(1 / 3, p.close.index, p.close.columns),
+        rebalance="M",
+        costs=NO_COST,
+    )
     d = r.equity.index
     sub = r.between(d[100], d[200])
-    assert sub.equity.iloc[0] == 1.0 and sub.equity.index[0] == d[99]  # bar before start is the base
+    assert (
+        sub.equity.iloc[0] == 1.0 and sub.equity.index[0] == d[99]
+    )  # bar before start is the base
     assert sub.equity.index[-1] == d[199]  # end is exclusive
     assert sub.equity.iloc[-1] == pytest.approx(r.equity[d[199]] / r.equity[d[99]])

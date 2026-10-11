@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Settings and Jobs</title>
+<style>
+/*__CSS__*/
+pre.log { white-space: pre-wrap; font-size: 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 8px; max-height: 320px; overflow: auto; margin: 6px 0 0; }
+td.jsonc { white-space: normal; text-align: left; font-size: 12px; color: var(--ink2); max-width: 420px; }
+</style>
+</head>
+<body>
+<!--__NAV__-->
+<div class="wrap">
+  <header>
+    <h1>Settings and jobs</h1>
+    <span class="sub" id="meta"></span>
+    <span class="spacer"></span>
+    <button id="theme" title="Toggle light / dark">Theme</button>
+  </header>
+
+  <div class="grid2">
+    <section class="card" aria-label="Status"><div class="card-head"><h2>Status</h2></div><div id="status" class="pad"></div></section>
+    <section class="card" aria-label="Run now"><div class="card-head"><h2>Run the daily job now</h2></div>
+      <div class="pad">
+        <p class="muted" style="margin-top:0">Normally the scheduler runs it at 16:30 ET on every NYSE session. Running it again for the same session replaces that session's outputs; your fills are never touched.</p>
+        <button class="primary" id="runFetch">Fetch prices and run</button>
+        <button id="runCached">Run on cached prices</button>
+      </div></section>
+  </div>
+
+  <section class="card" aria-label="Schedule"><div class="card-head"><h2>Schedule and sizing</h2></div>
+    <div class="pad muted">Daily job: 16:30 ET on NYSE sessions, with a catch-up run when the scheduler starts after a missed session.
+      Backup: 23:00 ET to <code>data/backups/</code>, newest 30 kept. Capital, minimum order size and fractional shares are on the <a href="/strategy">Strategy</a> page.</div></section>
+
+  <section class="card" aria-label="Jobs"><div class="card-head"><h2>Job history</h2><span class="hint">click a row for its log</span></div>
+    <div class="tablewrap" id="jobs"></div></section>
+
+  <section class="card" aria-label="Audit log"><div class="card-head"><h2>Audit log</h2><span class="hint">every change to fills, cash and the active strategy</span></div>
+    <div class="tablewrap" id="audit"></div></section>
+</div>
+
+<script>
+"use strict";
+const D = null /*__DATA__*/;
+/*__COMMON_JS__*/
+
+let J = [], A = [], Hh = null;
+const open = new Set();
+function render() {
+  $("#meta").textContent = Hh ? `prices through ${Hh.data_last_date || "–"}` : "";
+  $("#status").innerHTML = !Hh ? "" :
+    `<div>Last completed session: <b>${esc(Hh.expected_session)}</b></div>` +
+    `<div>Prices through: <b>${esc(Hh.data_last_date || "none")}</b>${Hh.data_last_date && Hh.data_last_date < Hh.expected_session ? ' <span class="act down">stale</span>' : ""}</div>` +
+    `<div>Last successful daily job: <b>${Hh.last_daily ? `${esc(Hh.last_daily.session_date || "–")} (${esc(Hh.last_daily.finished_at || "")} UTC)` : "never"}</b></div>` +
+    `<div>Daily job running now: <b>${Hh.daily_running ? "yes" : "no"}</b></div>`;
+  $("#jobs").innerHTML = !J.length ? `<div class="pad muted">No jobs yet.</div>` :
+    `<table><thead><tr><th>#</th><th class="l">Kind</th><th class="l">Session</th><th class="l">Status</th><th class="l">Started (UTC)</th><th class="l">Finished (UTC)</th></tr></thead><tbody>` +
+    J.map((j) => `<tr data-job="${j.id}" style="cursor:pointer"><td>${j.id}</td><td class="l">${esc(j.kind)}</td><td class="l">${esc(j.session_date || "–")}</td>` +
+      `<td class="l">${j.status === "failed" ? '<span class="act down">failed</span>' : esc(j.status)}</td><td class="l">${esc(j.started_at)}</td><td class="l">${esc(j.finished_at || "–")}</td></tr>` +
+      (open.has(j.id) ? `<tr><td colspan="6"><pre class="log">${esc(j.log_tail || "(no log)")}</pre></td></tr>` : "")).join("") + "</tbody></table>";
+  $("#audit").innerHTML = !A.length ? `<div class="pad muted">Nothing changed yet.</div>` :
+    `<table><thead><tr><th class="l">When (UTC)</th><th class="l">What</th><th class="l">Action</th><th class="l">Before</th><th class="l">After</th></tr></thead><tbody>` +
+    A.map((a) => `<tr><td class="l">${esc(a.ts)}</td><td class="l">${esc(a.entity)} #${a.entity_id}</td><td class="l">${esc(a.action)}</td>` +
+      `<td class="jsonc">${esc(a.before ? JSON.stringify(a.before) : "")}</td><td class="jsonc">${esc(a.after ? JSON.stringify(a.after) : "")}</td></tr>`).join("") + "</tbody></table>";
+}
+async function load() { [Hh, J, A] = await Promise.all([api("/api/health"), api("/api/jobs"), api("/api/audit")]); render(); }
+$("#jobs").addEventListener("click", (e) => {
+  const tr = e.target.closest("tr[data-job]"); if (!tr) return;
+  const id = +tr.dataset.job; open.has(id) ? open.delete(id) : open.add(id); render();
+});
+async function run(fetchPrices) {
+  try { await api("/api/jobs/daily", { method: "POST", body: { fetch: fetchPrices } }); toast("Daily job started"); }
+  catch (err) { toast(err.message); return; }
+  for (;;) { await new Promise((r) => setTimeout(r, 3000)); await load(); if (!Hh.daily_running) break; }
+  toast(`Daily job ${J[0] ? J[0].status : "finished"}`);
+}
+$("#runFetch").addEventListener("click", () => run(true));
+$("#runCached").addEventListener("click", () => run(false));
+initTheme(render);
+load().catch((err) => toast(err.message));
+</script>
+</body>
+</html>

@@ -1,4 +1,5 @@
 """Snapshot screener: one row per symbol with momentum / trend / volatility / volume fields."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -60,6 +61,8 @@ PRESETS = {
     "oversold": lambda f: f[f.rsi < 30].sort_values("rsi"),
     "overbought": lambda f: f[f.rsi > 70].sort_values("rsi", ascending=False),
     "high": lambda f: f[f.from_high > -0.03].sort_values("from_high", ascending=False),
-    "golden": lambda f: f[f.golden == True].sort_values("vs200", ascending=False),  # noqa: E712
+    "golden": lambda f: f[f.golden == True].sort_values(
+        "vs200", ascending=False
+    ),  # noqa: E712
     "volume": lambda f: f[f.vol_ratio > 2].sort_values("vol_ratio", ascending=False),
 }

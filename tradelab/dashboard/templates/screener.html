@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nasdaq-100 Screener</title>
+<style>
+/*__CSS__*/
+.filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 12px; border-bottom: 1px solid var(--line); }
+input[type=search] { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; width: 190px; }
+.count { margin-left: auto; color: var(--ink2); font-variant-numeric: tabular-nums; }
+.tablewrap { max-height: 380px; }
+tbody tr { cursor: pointer; }
+tbody tr:hover { background: var(--hover); }
+tbody tr[aria-selected="true"] { background: var(--select); }
+td.sym { font-weight: 650; }
+td.name { color: var(--ink2); max-width: 190px; overflow: hidden; text-overflow: ellipsis; }
+.star { background: none; border: none; padding: 0 4px; font-size: 16px; line-height: 1; color: var(--muted); }
+.star[aria-pressed="true"] { color: var(--s2); }
+td.sig { text-align: left; }
+.chart-head { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; padding: 12px; border-bottom: 1px solid var(--line); }
+.chart-head .big { font-size: 18px; font-weight: 650; }
+.stat { color: var(--ink2); font-size: 13px; }
+.stat b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+label.ov { display: inline-flex; align-items: center; gap: 5px; color: var(--ink2); font-size: 13px; cursor: pointer; }
+#chart { height: 760px; }
+details table { margin-top: 8px; }
+@media (max-width: 640px) { #chart { height: 640px; } input[type=search] { width: 100%; } .count { margin-left: 0; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Nasdaq-100 Screener</h1>
+    <span class="sub" id="asof"></span>
+    <span class="spacer"></span>
+    <button id="theme" title="Toggle light / dark">Theme</button>
+  </header>
+
+  <section class="card" aria-label="Screener">
+    <div class="filters" id="filters" role="toolbar" aria-label="Screener filters">
+      <input type="search" id="q" placeholder="Search symbol or name" aria-label="Search symbol or name">
+    </div>
+    <div class="tablewrap">
+      <table id="tbl"><thead></thead><tbody></tbody></table>
+    </div>
+  </section>
+
+  <section class="card" aria-label="Technical chart">
+    <div class="chart-head" id="chead"></div>
+    <div id="chart"></div>
+    <details><summary>Recent bars (table view)</summary><div id="bars"></div></details>
+  </section>
+
+  <p class="note">
+    Universe: current Nasdaq-100 members; prices are Yahoo Finance split/dividend-adjusted closes. Screener values are as of the last bar.
+    Candles: hollow = close above open, filled = close below open. For research only, not investment advice.
+  </p>
+</div>
+
+<script>/*__PLOTLY__*/</script>
+<script>
+"use strict";
+const D = null /*__DATA__*/;
+/*__COMMON_JS__*/
+const watch = new Set(store.get("watch", []));
+const state = { sortKey: "mcap", dir: -1, q: "", preset: "all", sel: null, range: store.get("range", 252),
+                ov: store.get("ov", { s20: true, s50: true, s200: true, bb: false }) };
+const mcap = (v) => v == null ? "–" : "$" + f0.format(v / 1e9) + "B";
+
+/* ---------- screener definition ---------- */
+const COLS = [
+  { k: "symbol", label: "Symbol", cls: "l sym" },
+  { k: "name", label: "Name", cls: "l name" },
+  { k: "mcap", label: "Mkt cap", fmt: mcap },
+  { k: "price", label: "Price", fmt: money },
+  { k: "chg_1d", label: "1D", fmt: pct, heat: 0.05 },
+  { k: "chg_5d", label: "5D", fmt: pct, heat: 0.10 },
+  { k: "chg_1m", label: "1M", fmt: pct, heat: 0.20 },
+  { k: "chg_3m", label: "3M", fmt: pct, heat: 0.35 },
+  { k: "mom_12_1", label: "12-1 mom", fmt: pct, heat: 0.8 },
+  { k: "from_high", label: "vs 52w high", fmt: pct, heat: 0.4 },
+  { k: "rsi", label: "RSI 14", fmt: num1 },
+  { k: "vs50", label: "vs SMA50", fmt: pct, heat: 0.2 },
+  { k: "vs200", label: "vs SMA200", fmt: pct, heat: 0.5 },
+  { k: "vol60", label: "Vol 60d", fmt: pctPlain },
+  { k: "vol_ratio", label: "Vol ×20d", fmt: mult },
+  { k: "signals", label: "Signals", cls: "l sig", nosort: true },
+];
+const PRESETS = [
+  ["all", "All", () => true],
+  ["watch", "★ Watchlist", (r) => watch.has(r.symbol)],
+  ["oversold", "Oversold RSI<30", (r) => r.rsi != null && r.rsi < 30],
+  ["overbought", "Overbought RSI>70", (r) => r.rsi != null && r.rsi > 70],
+  ["near_high", "Within 3% of 52w high", (r) => r.from_high != null && r.from_high > -0.03],
+  ["high20", "New 20d high", (r) => r.new_high20 === true],
+  ["above200", "Above SMA200", (r) => r.vs200 != null && r.vs200 > 0],
+  ["golden", "SMA50 > SMA200", (r) => r.golden === true],
+  ["volspike", "Volume > 2× avg", (r) => r.vol_ratio != null && r.vol_ratio > 2],
+];
+function signals(r) {
+  const s = [];
+  if (r.rsi != null && r.rsi < 30) s.push("Oversold");
+  if (r.rsi != null && r.rsi > 70) s.push("Overbought");
+  if (r.new_high20) s.push("20d high");
+  if (r.from_high != null && r.from_high > -0.03) s.push("Near 52w high");
+  if (r.vol_ratio != null && r.vol_ratio > 2) s.push("Volume spike");
+  return s;
+}
+D.rows.forEach((r) => { r.signals = signals(r); });
+const rowBy = Object.fromEntries(D.rows.map((r) => [r.symbol, r]));
+
+/* ---------- table ---------- */
+function visibleRows() {
+  const q = state.q.trim().toLowerCase();
+  const pred = PRESETS.find((p) => p[0] === state.preset)[2];
+  let rows = D.rows.filter((r) => pred(r) && (!q || r.symbol.toLowerCase().includes(q) || (r.name || "").toLowerCase().includes(q)));
+  const k = state.sortKey, d = state.dir;
+  rows.sort((a, b) => {
+    const x = a[k], y = b[k];
+    if (x == null && y == null) return 0;
+    if (x == null) return 1;           // missing values always last
+    if (y == null) return -1;
+    return (typeof x === "string" ? x.localeCompare(y) : x - y) * d;
+  });
+  return rows;
+}
+function renderHead() {
+  $("#tbl thead").innerHTML = "<tr><th aria-label='Watchlist'></th>" + COLS.map((c) =>
+    `<th class="${c.cls || ""}" data-k="${c.k}" ${c.nosort ? "" : `tabindex="0" aria-sort="${state.sortKey === c.k ? (state.dir > 0 ? "ascending" : "descending") : "none"}"`}>${c.label}</th>`).join("") + "</tr>";
+}
+function renderTable() {
+  const rows = visibleRows();
+  $("#count").textContent = `${rows.length} of ${D.rows.length}`;
+  $("#tbl tbody").innerHTML = rows.map((r) => {
+    const tds = COLS.map((c) => {
+      if (c.k === "signals") return `<td class="sig">${r.signals.map((s) => `<span class="badge">${s}</span>`).join("")}</td>`;
+      const v = r[c.k];
+      const txt = c.fmt ? c.fmt(v) : esc(v);
+      const style = c.heat ? ` style="${heatBg(v, c.heat)}"` : "";
+      return `<td class="${c.cls || ""}"${style}>${txt}</td>`;
+    }).join("");
+    const w = watch.has(r.symbol);
+    const sym = esc(r.symbol);
+    return `<tr tabindex="0" data-s="${sym}" aria-selected="${r.symbol === state.sel}">` +
+      `<td><button class="star" data-star="${sym}" aria-pressed="${w}" aria-label="${w ? "Remove" : "Add"} ${sym} ${w ? "from" : "to"} watchlist">${w ? "★" : "☆"}</button></td>${tds}</tr>`;
+  }).join("") || `<tr><td colspan="${COLS.length + 1}" class="empty">No symbols match.</td></tr>`;
+}
+function setSort(k) {
+  if (state.sortKey === k) state.dir *= -1; else { state.sortKey = k; state.dir = (k === "symbol" || k === "name") ? 1 : -1; }
+  renderHead(); renderTable();
+}
+function toggleWatch(s) {
+  watch.has(s) ? watch.delete(s) : watch.add(s);
+  store.set("watch", [...watch]);
+  renderTable(); renderChartHead();
+}
+function select(s) {
+  state.sel = s;
+  renderTable(); renderChartHead(); renderChart(); renderBars();
+}
+
+/* ---------- chart ---------- */
+const RANGES = [["1M", 21], ["3M", 63], ["6M", 126], ["1Y", 252], ["2Y", 504]];
+function renderChartHead() {
+  const r = rowBy[state.sel]; if (!r) return;
+  const w = watch.has(r.symbol);
+  const sw = (c) => `<span class="swatch" style="border-color:var(${c})"></span>`;
+  $("#chead").innerHTML =
+    `<span class="big">${esc(r.symbol)}</span><span class="sub">${esc(r.name)}</span>` +
+    `<span class="big">${money(r.price)}</span><span class="sub">${pct(r.chg_1d)} today</span>` +
+    `<button class="star" id="cstar" aria-pressed="${w}" title="Watchlist">${w ? "★" : "☆"}</button>` +
+    `<span class="stat">RSI <b>${num1(r.rsi)}</b></span><span class="stat">vs SMA200 <b>${pct(r.vs200)}</b></span>` +
+    `<span class="stat">vs 52w high <b>${pct(r.from_high)}</b></span>` +
+    `<span class="spacer"></span>` +
+    `<span class="seg" role="group" aria-label="Range">${RANGES.map(([l, n]) => `<button data-range="${n}" aria-pressed="${state.range === n}">${l}</button>`).join("")}</span>` +
+    [["s20", "SMA 20", "--s1"], ["s50", "SMA 50", "--s2"], ["s200", "SMA 200", "--s3"], ["bb", "Bollinger 20,2", "--muted"]].map(([k, l, c]) =>
+      `<label class="ov"><input type="checkbox" data-ov="${k}" ${state.ov[k] ? "checked" : ""}>${sw(c)}${l}</label>`).join("");
+}
+function renderChart() {
+  const s = D.symbols[state.sel]; if (!s) return;
+  const n = D.dates.length, from = Math.max(0, n - state.range);
+  const sl = (a) => a.slice(from), x = sl(D.dates);
+  const ink = css("--ink"), ink2 = css("--ink2"), muted = css("--muted"), grid = css("--grid"), surface = css("--surface"), line = css("--line");
+  const pos = css("--pos"), neg = css("--neg");
+  const [mr, mg, mb] = hexRgb(muted);
+  const lineTrace = (key, name, color, extra = {}) => ({ type: "scatter", mode: "lines", x, y: sl(s[key]), name, line: { color, width: 1.6 },
+    connectgaps: false, xaxis: "x", yaxis: "y", hovertemplate: "%{y:.2f}", visible: state.ov[extra.group || key] ? true : "legendonly", ...extra });
+  const traces = [
+    { type: "candlestick", x, open: sl(s.o), high: sl(s.h), low: sl(s.l), close: sl(s.c), name: state.sel, yaxis: "y",
+      increasing: { line: { color: ink, width: 1 }, fillcolor: surface }, decreasing: { line: { color: ink, width: 1 }, fillcolor: ink }, whiskerwidth: 0.4 },
+    lineTrace("s20", "SMA 20", css("--s1")), lineTrace("s50", "SMA 50", css("--s2")), lineTrace("s200", "SMA 200", css("--s3")),
+    lineTrace("bbu", "Bollinger 20,2", muted, { group: "bb", legendgroup: "bb", line: { color: muted, width: 1, dash: "dot" } }),
+    lineTrace("bbl", "Bollinger lower", muted, { group: "bb", legendgroup: "bb", showlegend: false, line: { color: muted, width: 1, dash: "dot" },
+      fill: "tonexty", fillcolor: `rgba(${mr},${mg},${mb},0.10)` }),
+    { type: "bar", x, y: sl(s.v), name: "Volume", marker: { color: muted }, opacity: 0.7, yaxis: "y2", hovertemplate: "%{y:,.0f}", showlegend: false },
+    { type: "scatter", mode: "lines", x, y: sl(s.rsi), name: "RSI 14", line: { color: css("--s1"), width: 1.6 }, yaxis: "y3", hovertemplate: "%{y:.1f}", showlegend: false },
+    { type: "bar", x, y: sl(s.hist), name: "Histogram", marker: { color: sl(s.hist).map((v) => (v != null && v < 0 ? neg : pos)) }, opacity: 0.55, yaxis: "y4", hovertemplate: "%{y:.3f}", showlegend: false },
+    { type: "scatter", mode: "lines", x, y: sl(s.macd), name: "MACD", line: { color: css("--s1"), width: 1.6 }, yaxis: "y4", hovertemplate: "%{y:.3f}", showlegend: false },
+    { type: "scatter", mode: "lines", x, y: sl(s.sig), name: "Signal", line: { color: css("--s2"), width: 1.6 }, yaxis: "y4", hovertemplate: "%{y:.3f}", showlegend: false },
+  ];
+  const ax = (dom, extra = {}) => ({ domain: dom, gridcolor: grid, zeroline: false, linecolor: line, tickfont: { color: ink2, size: 11 }, ...extra });
+  const label = (text, y) => ({ xref: "paper", yref: "paper", x: 0, y, xanchor: "left", yanchor: "bottom", text, showarrow: false, font: { size: 11, color: ink2 } });
+  const ref = (v) => ({ type: "line", xref: "paper", x0: 0, x1: 1, yref: "y3", y0: v, y1: v, line: { color: muted, width: 1, dash: "dash" } });
+  const layout = {
+    ...plotTheme(),
+    margin: { l: 58, r: 14, t: 34, b: 34 }, hovermode: "x unified", bargap: 0.2,
+    legend: { orientation: "h", x: 0, y: 1.07, font: { color: ink2 } },
+    xaxis: { type: "category", anchor: "y4", nticks: 8, rangeslider: { visible: false }, showgrid: false, linecolor: line, tickfont: { color: ink2, size: 11 },
+             showspikes: true, spikemode: "across", spikesnap: "cursor", spikecolor: muted, spikethickness: 1, spikedash: "dot" },
+    yaxis: ax([0.47, 1], { tickformat: ",.2f" }),
+    yaxis2: ax([0.355, 0.44], { showgrid: false, tickformat: ".2s" }),
+    yaxis3: ax([0.185, 0.325], { range: [0, 100], tickvals: [30, 50, 70] }),
+    yaxis4: ax([0, 0.15], { zeroline: true, zerolinecolor: line, tickformat: ".2f" }),
+    shapes: [ref(30), ref(70)],
+    annotations: [label("Volume", 0.44), label("RSI 14", 0.325), label("MACD 12, 26, 9", 0.15)],
+  };
+  Plotly.react("chart", traces, layout, PLOT_CONFIG);
+}
+function renderBars() {
+  const s = D.symbols[state.sel]; if (!s) return;
+  const n = D.dates.length, rows = [];
+  for (let i = n - 1; i >= Math.max(0, n - 10); i--) {
+    rows.push(`<tr><td class="l">${D.dates[i]}</td>` + ["o", "h", "l", "c"].map((k) => `<td>${s[k][i] == null ? "–" : f2.format(s[k][i])}</td>`).join("") +
+      `<td>${s.v[i] == null ? "–" : f0.format(s.v[i])}</td><td>${s.rsi[i] == null ? "–" : f1.format(s.rsi[i])}</td></tr>`);
+  }
+  $("#bars").innerHTML = `<table><thead><tr><th class="l">Date</th><th>Open</th><th>High</th><th>Low</th><th>Close</th><th>Volume</th><th>RSI 14</th></tr></thead><tbody>${rows.join("")}</tbody></table>`;
+}
+
+/* ---------- wiring ---------- */
+function init() {
+  initTheme(() => { renderTable(); renderChart(); });
+  $("#asof").textContent = `${D.rows.length} symbols · as of ${D.asof}`;
+  $("#filters").insertAdjacentHTML("beforeend",
+    PRESETS.map(([k, l]) => `<button class="chip" data-preset="${k}" aria-pressed="${k === state.preset}">${l}</button>`).join("") + `<span class="count" id="count"></span>`);
+  renderHead(); renderTable();
+
+  $("#q").addEventListener("input", (e) => { state.q = e.target.value; renderTable(); });
+  $("#filters").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-preset]"); if (!b) return;
+    state.preset = b.dataset.preset;
+    document.querySelectorAll("[data-preset]").forEach((x) => x.setAttribute("aria-pressed", x === b));
+    renderTable();
+  });
+  $("#tbl thead").addEventListener("click", (e) => { const th = e.target.closest("th[data-k]"); if (th && !th.matches("[data-k=signals]")) setSort(th.dataset.k); });
+  $("#tbl thead").addEventListener("keydown", (e) => { if (e.key === "Enter") e.target.click(); });
+  $("#tbl tbody").addEventListener("click", (e) => {
+    const st = e.target.closest("[data-star]");
+    if (st) { e.stopPropagation(); toggleWatch(st.dataset.star); return; }
+    const tr = e.target.closest("tr[data-s]"); if (tr) select(tr.dataset.s);
+  });
+  $("#tbl tbody").addEventListener("keydown", (e) => {
+    const tr = e.target.closest("tr[data-s]"); if (!tr) return;
+    if (e.key === "Enter") select(tr.dataset.s);
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") { const n = e.key === "ArrowDown" ? tr.nextElementSibling : tr.previousElementSibling; if (n) { n.focus(); e.preventDefault(); } }
+  });
+  $("#chead").addEventListener("click", (e) => {
+    if (e.target.id === "cstar") return toggleWatch(state.sel);
+    const r = e.target.closest("[data-range]");
+    if (r) { state.range = +r.dataset.range; store.set("range", state.range); renderChartHead(); renderChart(); }
+  });
+  $("#chead").addEventListener("change", (e) => {
+    const o = e.target.dataset.ov; if (!o) return;
+    state.ov[o] = e.target.checked; store.set("ov", state.ov); renderChart();
+  });
+  const first = visibleRows()[0];
+  if (first) select(first.symbol);
+}
+init();
+</script>
+</body>
+</html>

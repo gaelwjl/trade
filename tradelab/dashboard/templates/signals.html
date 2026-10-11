@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Strategy Signals</title>
+<style>
+/*__CSS__*/
+.lede { color: var(--ink2); max-width: 920px; margin: 0 0 14px; }
+.lede b { color: var(--ink); font-weight: 600; }
+.banner { border: 1px solid var(--neg); border-radius: 10px; padding: 10px 14px; margin-bottom: 14px; }
+.banner b { font-weight: 650; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; margin-bottom: 14px; }
+.toolbar label { display: inline-flex; gap: 8px; align-items: center; color: var(--ink2); }
+select, input[type=number] { font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; }
+input[type=number] { width: 120px; }
+.hint { color: var(--muted); font-size: 12px; }
+.act { display: inline-block; min-width: 54px; text-align: center; font-size: 11px; font-weight: 650; letter-spacing: .03em;
+       padding: 2px 7px; border-radius: 4px; border: 1px solid var(--line); color: var(--ink); }
+.act.up { background: color-mix(in srgb, var(--pos) 22%, transparent); border-color: color-mix(in srgb, var(--pos) 55%, transparent); }
+.act.down { background: color-mix(in srgb, var(--neg) 22%, transparent); border-color: color-mix(in srgb, var(--neg) 55%, transparent); }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 560px), 1fr)); gap: 16px; margin-top: 16px; }
+.grid section.card + section.card { margin-top: 0; }
+.status { font-size: 13px; }
+.status b { font-weight: 650; }
+.kpis { display: flex; flex-wrap: wrap; gap: 6px 18px; padding: 10px 12px; color: var(--ink2); font-size: 13px; border-bottom: 1px solid var(--line); }
+.kpis b { color: var(--ink); font-variant-numeric: tabular-nums; font-weight: 600; }
+.sec { padding: 10px 12px 4px; font-size: 12px; font-weight: 600; color: var(--ink2); }
+.desc { padding: 0 12px 10px; color: var(--ink2); font-size: 13px; }
+td.sym { font-weight: 650; text-align: left; }
+td.nm2 { color: var(--ink2); text-align: left; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.cards-empty { padding: 16px 12px; color: var(--ink2); }
+details.hold { border-top: 1px solid var(--line); padding: 0; }
+details.hold summary { padding: 10px 12px; }
+details.hold .tablewrap { max-height: 360px; }
+.pnl-up { color: var(--ink); }
+td.tags { text-align: left; white-space: normal; min-width: 180px; }
+td.tags .act { margin: 1px 4px 1px 0; }
+code { font-size: 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; }
+section.card + .grid { margin-top: 16px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Strategy Signals</h1>
+    <span class="sub" id="meta"></span>
+    <span class="spacer"></span>
+    <button id="theme" title="Toggle light / dark">Theme</button>
+  </header>
+  <div id="banner"></div>
+  <p class="lede">
+    What each strategy's rules call for <b>after the selected close</b>, filled at the <b>next session's open</b>
+    (the backtests' assumption). Weekly and monthly strategies only trade on their rebalance day; on other days
+    they show the portfolio in force and the next rebalance date. This is the mechanical output of backtested rules on a
+    survivorship-biased universe, <b>not investment advice</b>: check prices, liquidity and your own constraints before acting.
+  </p>
+  <div class="toolbar">
+    <span role="group" aria-label="Signal date" style="display:inline-flex;gap:6px;align-items:center">
+      <button id="prev" aria-label="Previous session">◀</button>
+      <select id="day" aria-label="Signal date (close)"></select>
+      <button id="next" aria-label="Next session">▶</button>
+    </span>
+    <label>Capital per strategy $ <input type="number" id="cap" min="0" step="1000" placeholder="optional"></label>
+    <span class="hint">share counts use the selected close; the fill will be at the next open</span>
+  </div>
+
+  <section class="card" aria-label="My portfolio">
+    <div class="card-head"><h2>My portfolio</h2><span class="hint" id="pfHint"></span></div>
+    <div id="portfolio"></div>
+  </section>
+
+  <section class="card" aria-label="New buy signals">
+    <div class="card-head"><h2 id="buyTitle">New buy signals</h2><span class="hint">names a strategy enters at the next open, most-agreed first</span></div>
+    <div class="tablewrap" id="buys"></div>
+  </section>
+
+  <section class="card" aria-label="All changes at the next open">
+    <div class="card-head"><h2 id="tradesTitle">All changes at the next open</h2><span class="hint">every name any strategy changes · action per strategy</span></div>
+    <div class="tablewrap" id="consensus"></div>
+  </section>
+
+  <div class="grid" id="cards"></div>
+
+  <p class="note" id="foot"></p>
+</div>
+
+<script>
+"use strict";
+const D = null /*__DATA__*/;
+/*__COMMON_JS__*/
+
+const ST = D.strategies;
+const state = { day: D.dates.length - 1, cap: store.get("sig.cap", null) };
+const REB = { D: "Daily", W: "Weekly", M: "Monthly", Q: "Quarterly" };
+const UP = new Set(["BUY", "ADD", "COVER"]), DOWN = new Set(["SELL", "TRIM", "SHORT"]);
+const ORDER = { BUY: 0, SHORT: 1, FLIP: 2, SELL: 3, COVER: 4, ADD: 5, TRIM: 6 };
+
+const dayLabel = (s) => new Date(s + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" });
+const actBadge = (a) => `<span class="act ${UP.has(a) ? "up" : DOWN.has(a) ? "down" : ""}">${a}</span>`;
+const wfmt = (v) => v == null ? "–" : (v <= -0.0005 ? MINUS : "") + f1.format(Math.abs(v) * 100) + "%";  // no "−0.0%"
+function scoreFmt(unit, v) {
+  if (v == null) return "–";
+  if (unit === "level") return f1.format(v);
+  if (unit === "vol") return pctPlain(v);
+  return pct(v);
+}
+function shares(weight, price) {
+  if (!state.cap || weight == null || !price) return "–";
+  const n = Math.round(weight * state.cap / price);
+  return (n < 0 ? MINUS : "") + f0.format(Math.abs(n));
+}
+const nameOf = (s) => esc(D.names[s] || "");
+
+/* ---------- consensus: every name traded on the selected day ---------- */
+function renderConsensus(day) {
+  const traded = new Map();   // symbol -> {price, acts: {strategy: action}}
+  const holding = new Map();  // symbol -> count of strategies holding after the close
+  ST.forEach((s) => {
+    const d = s.days[day]; if (!d) return;
+    d.hold.forEach(([sym]) => holding.set(sym, (holding.get(sym) || 0) + 1));
+    d.trades.forEach(([sym, act, , , , px]) => {
+      if (!traded.has(sym)) traded.set(sym, { px, acts: {} });
+      traded.get(sym).acts[s.name] = act;
+    });
+  });
+  const rebal = ST.filter((s) => s.days[day]?.decision);
+  $("#tradesTitle").textContent = `All changes at the open of ${dayLabel(nextSession(day))}`;
+  if (!traded.size) {
+    const nxt = ST.map((s) => `${esc(s.short)}: ${s.days[day] ? dayLabel(s.days[day].next) : "–"}`).join(" · ");
+    $("#consensus").innerHTML = `<div class="cards-empty">No strategy changes its portfolio after this close${rebal.length ? " (rebalances produced no changes)" : ""}. Next rebalances: ${nxt}</div>`;
+    return;
+  }
+  const rows = [...traded.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  $("#consensus").innerHTML = `<table><thead><tr><th class="l">Symbol</th><th class="l">Name</th><th>Close</th>` +
+    ST.map((s) => `<th title="${esc(s.name)}">${esc(s.short)}</th>`).join("") + `<th title="strategies holding the name after this close">Held by</th></tr></thead><tbody>` +
+    rows.map(([sym, r]) => `<tr><td class="sym">${esc(sym)}</td><td class="nm2">${nameOf(sym)}</td><td>${money(r.px)}</td>` +
+      ST.map((s) => `<td>${r.acts[s.name] ? actBadge(r.acts[s.name]) : '<span class="hint">·</span>'}</td>`).join("") +
+      `<td>${holding.get(sym) || 0} / ${ST.length}</td></tr>`).join("") + "</tbody></table>";
+}
+
+/* ---------- one card per strategy ---------- */
+function renderCard(s, day) {
+  const d = s.days[day];
+  if (!d) return `<section class="card"><div class="card-head"><h2>${esc(s.name)}</h2></div><div class="cards-empty">No data for this date.</div></section>`;
+  const gross = d.hold.reduce((a, h) => a + Math.abs(h[1]), 0), net = d.hold.reduce((a, h) => a + h[1], 0);
+  const status = d.decision && d.trades.length
+    ? `<span class="status"><b>Rebalance</b> at the next open · ${d.trades.length} change${d.trades.length === 1 ? "" : "s"}</span>`
+    : d.decision
+    ? `<span class="status">Checked at this close · <b>no changes</b> · next check ${dayLabel(d.next)}</span>`
+    : `<span class="status">No trade · next rebalance after the close of <b>${dayLabel(d.next)}</b></span>`;
+  const kpis = `<div class="kpis"><span>Positions <b>${d.hold.length}</b></span><span>Invested <b>${wfmt(gross)}</b></span>` +
+    (Math.abs(gross - net) > 1e-6 ? `<span>Net <b>${wfmt(net)}</b></span>` : `<span>Cash <b>${wfmt(Math.max(0, 1 - net))}</b></span>`) +
+    `<span>Target set <b>${d.since ? dayLabel(d.since) : "–"}</b></span></div>`;
+  const trades = d.decision && d.trades.length ? `<div class="sec">Changes</div><div class="tablewrap"><table><thead><tr><th class="l">Action</th><th class="l">Symbol</th>` +
+    `<th>From</th><th>To</th><th>${esc(s.score_label)}</th><th>Δ shares</th></tr></thead><tbody>` +
+    [...d.trades].sort((a, b) => (ORDER[a[1]] - ORDER[b[1]]) || a[0].localeCompare(b[0])).map(([sym, act, from, to, fv, px]) =>
+      `<tr><td class="l">${actBadge(act)}</td><td class="sym">${esc(sym)}</td><td>${wfmt(from)}</td><td>${wfmt(to)}</td>` +
+      `<td>${scoreFmt(s.unit, fv)}</td><td>${shares(to - from, px)}</td></tr>`).join("") + "</tbody></table></div>" : "";
+  const hold = d.hold.length ? `<details class="hold"${d.hold.length <= 12 ? " open" : ""}><summary>Portfolio after this close (${d.hold.length})</summary><div class="tablewrap"><table><thead><tr>` +
+    `<th class="l">Symbol</th><th class="l">Name</th><th>Weight</th><th>${esc(s.score_label)}</th><th>Shares</th></tr></thead><tbody>` +
+    [...d.hold].sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]) || a[0].localeCompare(b[0])).map(([sym, w, fv, px]) =>
+      `<tr><td class="sym">${esc(sym)}</td><td class="nm2">${nameOf(sym)}</td><td>${wfmt(w)}</td><td>${scoreFmt(s.unit, fv)}</td><td>${shares(w, px)}</td></tr>`).join("") +
+    "</tbody></table></div></details>" : `<div class="cards-empty">All cash.</div>`;
+  return `<section class="card" aria-label="${esc(s.name)}"><div class="card-head"><h2>${esc(s.name)}</h2><span class="badge">${REB[s.rebalance] || esc(s.rebalance)}</span>${status}</div>` +
+    `<div class="desc" style="padding-top:10px">${esc(s.desc)}</div>${kpis}${trades}${hold}</section>`;
+}
+
+/* ---------- my portfolio (current ledger) vs the selected day's signals ---------- */
+const P = D.portfolio;
+const held = new Map(P.positions.map((r) => [r.symbol, r]));
+const signedMoney = (v) => v == null ? "–" : sgn(v, "$" + f2.format(Math.abs(v)));
+function targetOf(s, day) { const d = s.days[day]; return d ? new Set(d.hold.map((h) => h[0])) : new Set(); }
+function renderPortfolio(day) {
+  $("#pfHint").innerHTML = `ledger <code>${esc(P.ledger)}</code> · signals for the selected close`;
+  if (!P.positions.length) {
+    $("#portfolio").innerHTML = `<div class="cards-empty">No trades recorded yet. Tell Claude what you bought (for example
+      "bought 10 NVDA at 229.50 following rsi2"), or run<br><code>python -m tradelab.portfolio add BUY NVDA 10 229.50 --strategy rsi2_reversion</code></div>` + recentTrades();
+    return;
+  }
+  const cost = P.positions.reduce((a, r) => a + r.cost, 0);
+  const value = P.positions.reduce((a, r) => a + (r.value ?? r.cost), 0);
+  const kpis = `<div class="kpis"><span>Positions <b>${P.positions.length}</b></span><span>Cost basis <b>${money(cost)}</b></span>` +
+    `<span>Value <b>${money(value)}</b></span><span>Unrealized <b>${signedMoney(value - cost)} (${pct((value - cost) / cost)})</b></span>` +
+    `<span>Realized <b>${signedMoney(P.realized)}</b></span></div>`;
+  const rows = [...P.positions].sort((a, b) => (b.value ?? 0) - (a.value ?? 0)).map((r) => {
+    const tags = (r.strategies || "").split(",").filter(Boolean);
+    const view = [];
+    tags.forEach((t) => {
+      const s = ST.find((x) => x.name === t);
+      if (s) view.push(targetOf(s, day).has(r.symbol) ? `<span class="act" title="${esc(t)} still holds it">${esc(s.short)}: IN</span>`
+                                                       : `<span class="act down" title="${esc(t)} no longer holds it">${esc(s.short)}: EXIT</span>`);
+    });
+    ST.forEach((s) => {
+      const t = s.days[day]?.trades.find((x) => x[0] === r.symbol);
+      if (t && !tags.includes(s.name) && (t[1] === "SELL" || t[1] === "TRIM")) view.push(`<span class="act down">${esc(s.short)}: ${t[1]}</span>`);
+    });
+    const n = ST.filter((s) => targetOf(s, day).has(r.symbol)).length;
+    return `<tr><td class="sym">${esc(r.symbol)}</td><td class="nm2">${nameOf(r.symbol)}</td><td>${f2.format(r.qty).replace(/\.00$/, "")}</td>` +
+      `<td>${money(r.avg_cost)}</td><td title="${esc(r.last_date || "")}">${money(r.last)}</td><td>${money(r.value)}</td>` +
+      `<td style="${heatBg(r.pnl_pct, 0.25)}">${signedMoney(r.pnl)}</td><td style="${heatBg(r.pnl_pct, 0.25)}">${pct(r.pnl_pct)}</td>` +
+      `<td class="tags">${view.join("") || '<span class="hint">untagged</span>'}</td><td>${n} / ${ST.length}</td></tr>`;
+  }).join("");
+  $("#portfolio").innerHTML = kpis + `<div class="tablewrap"><table><thead><tr><th class="l">Symbol</th><th class="l">Name</th><th>Qty</th>` +
+    `<th>Avg cost</th><th>Last</th><th>Value</th><th>P&amp;L</th><th>P&amp;L %</th><th class="l">Strategy view</th><th title="strategies whose target includes it">In targets</th>` +
+    `</tr></thead><tbody>${rows}</tbody></table></div>` + recentTrades();
+}
+function recentTrades() {
+  if (!P.trades.length) return "";
+  return `<details class="hold"><summary>Recent trades (${P.trades.length})</summary><div class="tablewrap"><table><thead><tr>` +
+    `<th class="l">Date</th><th class="l">Side</th><th class="l">Symbol</th><th>Qty</th><th>Price</th><th>Fees</th><th class="l">Strategy</th><th class="l">Note</th></tr></thead><tbody>` +
+    P.trades.map((t) => `<tr><td class="l">${esc(t.date)}</td><td class="l">${actBadge(t.side)}</td><td class="sym">${esc(t.symbol)}</td>` +
+      `<td>${f2.format(t.qty).replace(/\.00$/, "")}</td><td>${money(t.price)}</td><td>${money(t.fees)}</td><td class="l">${esc(t.strategy)}</td><td class="l">${esc(t.note)}</td></tr>`).join("") +
+    "</tbody></table></div></details>";
+}
+
+/* ---------- new buy signals: BUY actions on the selected day, ranked by agreement ---------- */
+function renderBuys(day) {
+  const buys = new Map();
+  ST.forEach((s) => (s.days[day]?.trades || []).forEach(([sym, act, , to, fv, px]) => {
+    if (act !== "BUY") return;
+    if (!buys.has(sym)) buys.set(sym, { px, by: [] });
+    buys.get(sym).by.push({ s, to, fv });
+  }));
+  $("#buyTitle").textContent = `New buy signals for the open of ${dayLabel(nextSession(day))}`;
+  if (!buys.size) {
+    $("#buys").innerHTML = `<div class="cards-empty">No strategy opens a new position after this close. A strategy's full target portfolio is in its card below.</div>`;
+    return;
+  }
+  const rows = [...buys.entries()].sort((a, b) => b[1].by.length - a[1].by.length || a[0].localeCompare(b[0]));
+  $("#buys").innerHTML = `<table><thead><tr><th class="l">Symbol</th><th class="l">Name</th><th>Close</th><th title="strategies opening it">Signals</th>` +
+    `<th class="l">Signalled by (target weight · signal value)</th><th title="strategies whose target includes it after this close">In targets</th><th>You hold</th></tr></thead><tbody>` +
+    rows.map(([sym, r]) => `<tr><td class="sym">${esc(sym)}</td><td class="nm2">${nameOf(sym)}</td><td>${money(r.px)}</td><td>${r.by.length}</td>` +
+      `<td class="tags">${r.by.map(({ s, to, fv }) => `<span class="act up" title="${esc(s.desc)}">${esc(s.short)}</span><span class="hint">${wfmt(to)} · ${esc(s.score_label)} ${scoreFmt(s.unit, fv)}</span> `).join(" ")}</td>` +
+      `<td>${ST.filter((s) => targetOf(s, day).has(sym)).length} / ${ST.length}</td>` +
+      `<td>${held.has(sym) ? f2.format(held.get(sym).qty).replace(/\.00$/, "") : '<span class="hint">–</span>'}</td></tr>`).join("") + "</tbody></table>";
+}
+
+/* next session after a date in the history (the following entry), or the build-time next session for the latest date */
+function nextSession(day) {
+  const i = D.dates.indexOf(day);
+  return i >= 0 && i < D.dates.length - 1 ? D.dates[i + 1] : D.meta.next_session;
+}
+
+function render() {
+  const day = D.dates[state.day];
+  $("#day").value = day;
+  $("#prev").disabled = state.day === 0;
+  $("#next").disabled = state.day === D.dates.length - 1;
+  renderPortfolio(day);
+  renderBuys(day);
+  renderConsensus(day);
+  $("#cards").innerHTML = ST.map((s) => renderCard(s, day)).join("");
+}
+
+function init() {
+  initTheme(render);
+  const m = D.meta;
+  $("#meta").textContent = `${m.universe} stocks · data through ${m.as_of} · built ${m.built}`;
+  if (m.stale) $("#banner").innerHTML = `<div class="banner" role="alert"><b>Data is stale.</b> Prices end ${dayLabel(m.as_of)}, but ${dayLabel(m.expected)} has already closed. ` +
+    `Run <code>python -m tradelab.fetch</code> then <code>python -m tradelab.signals</code>.</div>`;
+  $("#day").innerHTML = D.dates.map((d) => `<option value="${d}">${dayLabel(d)}</option>`).reverse().join("");
+  $("#day").addEventListener("change", (e) => { state.day = D.dates.indexOf(e.target.value); render(); });
+  $("#prev").addEventListener("click", () => { state.day = Math.max(0, state.day - 1); render(); });
+  $("#next").addEventListener("click", () => { state.day = Math.min(D.dates.length - 1, state.day + 1); render(); });
+  if (state.cap) $("#cap").value = state.cap;
+  $("#cap").addEventListener("input", (e) => { state.cap = +e.target.value || null; store.set("sig.cap", state.cap); render(); });
+  $("#foot").textContent = "Signals use only data through each close (tested for lookahead). Holidays follow the regular NYSE schedule; " +
+    "one-off closures are not modelled. Weight drift since the last rebalance is ignored. Not investment advice.";
+  render();
+}
+init();
+</script>
+</body>
+</html>

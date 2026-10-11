@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Strategy Backtests</title>
+<style>
+/*__CSS__*/
+.lede { color: var(--ink2); max-width: 900px; margin: 0 0 14px; }
+.lede b { color: var(--ink); font-weight: 600; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; margin-bottom: 14px; }
+.hint { color: var(--muted); font-size: 12px; }
+#periods { display: flex; flex-wrap: wrap; gap: 8px; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; padding: 10px 12px 0; font-size: 12px; color: var(--ink2); }
+.legend span.it { display: inline-flex; align-items: center; gap: 6px; }
+td.nm { text-align: left; }
+td.nm label { display: inline-flex; gap: 8px; align-items: center; cursor: pointer; }
+td.nm .swatch { width: 18px; border-top-width: 3px; }
+tr.off td { opacity: 0.45; }
+.dim { opacity: 0.35; }
+.chart { height: 420px; }
+#dd { height: 240px; }
+#roll { height: 280px; }
+dl { margin: 8px 0 0; display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; }
+dt { font-weight: 600; }
+dd { margin: 0; color: var(--ink2); }
+@media (max-width: 640px) { .chart { height: 340px; } dl { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Strategy Backtests</h1>
+    <span class="sub" id="meta"></span>
+    <span class="spacer"></span>
+    <button id="theme" title="Toggle light / dark">Theme</button>
+  </header>
+  <p class="lede">
+    Compare each strategy with <b>EW universe</b>, not just QQQ: both hold the same survivor-biased stocks,
+    so beating EW is the real test. A strategy that only wins <b>in-sample</b> is probably fitted to the past,
+    and one whose CAGR collapses in the <b>cost</b> table needs cheaper execution than you can get.
+  </p>
+  <div class="toolbar">
+    <span role="group" aria-label="Period" id="periods"></span>
+    <span class="hint">Charts are rebased to $1 at the period start; stats are computed for the period.</span>
+  </div>
+
+  <section class="card" aria-label="Performance table">
+    <div class="card-head"><h2>Performance</h2><span class="hint">Checkbox shows / hides a series in every chart · click a header to sort · net of costs</span></div>
+    <div class="tablewrap"><table id="stats"><thead></thead><tbody></tbody></table></div>
+  </section>
+
+  <section class="card" aria-label="Growth of one dollar">
+    <div class="card-head"><h2>Growth of $1</h2><span class="hint">log scale: equal slopes mean equal % growth</span></div>
+    <div class="legend" aria-hidden="true"></div><div id="eq" class="chart"></div>
+  </section>
+
+  <section class="card" aria-label="Drawdown">
+    <div class="card-head"><h2>Drawdown</h2><span class="hint">% below the previous peak</span></div>
+    <div class="legend" aria-hidden="true"></div><div id="dd" class="chart"></div>
+  </section>
+
+  <section class="card" aria-label="Rolling twelve months">
+    <div class="card-head"><h2>Rolling 12 months</h2>
+      <span class="seg" role="group" aria-label="Rolling metric" id="rollsel">
+        <button data-roll="ret">Return</button><button data-roll="sharpe">Sharpe</button>
+      </span>
+      <span class="hint">trailing 252 trading days at each date: shows whether an edge is steady or came from a few episodes</span>
+    </div>
+    <div class="legend" aria-hidden="true"></div><div id="roll" class="chart"></div>
+  </section>
+
+  <section class="card" aria-label="Calendar-year returns">
+    <div class="card-head"><h2>Calendar-year returns</h2><span class="hint">years outside the selected period are dimmed</span></div>
+    <div class="tablewrap"><table id="annual"></table></div>
+  </section>
+
+  <section class="card" aria-label="Cost sensitivity">
+    <div class="card-head"><h2>Cost sensitivity</h2><span class="hint">full period · CAGR · Sharpe at each one-way trading cost (commission + slippage)</span></div>
+    <div class="tablewrap"><table id="costs"></table></div>
+    <details><summary>Strategy definitions</summary><dl id="defs"></dl></details>
+  </section>
+
+  <p class="note">
+    Universe: current Nasdaq-100 members applied to the past (survivorship-biased: absolute numbers are inflated).
+    Signals use data through each close and trade at the next bar. Cash earns 0%. For research only, not investment advice.
+  </p>
+</div>
+
+<script>/*__PLOTLY__*/</script>
+<script>
+"use strict";
+const D = null /*__DATA__*/;
+/*__COMMON_JS__*/
+
+const S = D.series, N = D.dates.length;
+const state = {
+  period: store.get("bt.period", "full"), roll: store.get("bt.roll", "ret"),
+  hidden: new Set(store.get("bt.hidden", [])), sortKey: "Sharpe", dir: -1,
+};
+if (!D.periods.some((p) => p.key === state.period)) state.period = "full";
+
+/* identity: strategies take categorical slots in fixed order; benchmarks are neutral + dashed */
+const strategies = S.filter((s) => s.kind === "strategy").map((s) => s.name);
+function look(name) {
+  if (name === "QQQ") return { color: css("--ink"), dash: "dash", cssVar: "--ink", style: "dashed" };
+  if (name === "EW universe") return { color: css("--muted"), dash: "dot", cssVar: "--muted", style: "dotted" };
+  const v = `--c${strategies.indexOf(name) + 1}`;
+  return { color: css(v), dash: "solid", cssVar: v, style: "solid" };
+}
+const swatch = (name) => { const l = look(name); return `<span class="swatch" style="border-top:3px ${l.style} var(${l.cssVar})"></span>`; };
+
+/* ---------- period window ---------- */
+function period() { return D.periods.find((p) => p.key === state.period); }
+function window_() {
+  const p = period();
+  let i0 = 0, i1 = N - 1;
+  if (p.start) while (i0 < N && D.dates[i0] < p.start) i0++;
+  if (p.end) while (i1 > 0 && D.dates[i1] >= p.end) i1--;
+  return [i0, i1];
+}
+/* equity rebased to 1 on the bar before the window (same convention as Result.between) */
+function curve(name) {
+  const r = D.returns[name], [i0, i1] = window_(), x = [], y = [];
+  let eq = null;
+  for (let i = i0; i <= i1; i++) {
+    if (r[i] == null) { if (eq !== null) { x.push(D.dates[i]); y.push(eq); } continue; }
+    if (eq === null) { eq = 1; if (i > 0) { x.push(D.dates[i - 1]); y.push(1); } }
+    eq *= 1 + r[i]; x.push(D.dates[i]); y.push(eq);
+  }
+  return { x, y };
+}
+
+/* ---------- performance table ---------- */
+const STATS = [
+  ["CAGR", "CAGR", pct, 0.3], ["Vol", "Vol", pctPlain], ["Sharpe", "Sharpe", num2], ["Sortino", "Sortino", num2],
+  ["MaxDD", "Max DD", pctPlain, 0.6], ["Calmar", "Calmar", num2], ["Beta", "Beta vs QQQ", num2], ["Alpha", "Alpha vs QQQ", pct, 0.15],
+  ["Turnover/yr", "Turnover / yr", mult], ["CostDrag/yr", "Costs / yr", pctPlain], ["AvgExposure", "Exposure", pctPlain],
+];
+function renderStats() {
+  const st = D.stats[state.period];
+  $("#stats thead").innerHTML = `<tr><th class="l" data-k="name" aria-sort="${state.sortKey === "name" ? (state.dir > 0 ? "ascending" : "descending") : "none"}" tabindex="0">Series</th>` +
+    STATS.map(([k, l]) => `<th data-k="${k}" tabindex="0" aria-sort="${state.sortKey === k ? (state.dir > 0 ? "ascending" : "descending") : "none"}">${l}</th>`).join("") + "</tr>";
+  const rows = S.map((s) => s.name).sort((a, b) => {
+    if (state.sortKey === "name") return a.localeCompare(b) * state.dir;
+    const x = st[a]?.[state.sortKey], y = st[b]?.[state.sortKey];
+    if (x == null) return 1; if (y == null) return -1;
+    return (x - y) * state.dir;
+  });
+  $("#stats tbody").innerHTML = rows.map((n) => {
+    const s = S.find((z) => z.name === n), on = !state.hidden.has(n);
+    const cells = STATS.map(([k, , f, h]) => { const v = st[n]?.[k]; return `<td${h ? ` style="${heatBg(v, h)}"` : ""}>${f(v)}</td>`; }).join("");
+    return `<tr class="${on ? "" : "off"}"><td class="nm"><label title="${esc(s.desc)}"><input type="checkbox" data-series="${esc(n)}" ${on ? "checked" : ""}>` +
+      `${swatch(n)}${esc(n)}${s.kind === "benchmark" ? '<span class="badge">benchmark</span>' : ""}</label></td>${cells}</tr>`;
+  }).join("");
+}
+
+/* ---------- charts ---------- */
+function baseLayout(extra) {
+  const grid = css("--grid"), line = css("--line"), ink2 = css("--ink2");
+  return {
+    ...plotTheme(), margin: { l: 60, r: 16, t: 10, b: 36 }, hovermode: "x unified", showlegend: false,  // HTML legend above each chart
+    xaxis: { type: "date", showgrid: false, linecolor: line, tickfont: { color: ink2 }, showspikes: true, spikemode: "across",
+             spikesnap: "cursor", spikecolor: css("--muted"), spikethickness: 1, spikedash: "dot" },
+    yaxis: { gridcolor: grid, zeroline: false, linecolor: line, tickfont: { color: ink2 }, ...extra },
+  };
+}
+const visible = () => S.map((s) => s.name).filter((n) => !state.hidden.has(n));
+const lineOf = (name, x, y, fmt) => {
+  const l = look(name);
+  return { type: "scatter", mode: "lines", name, x, y, line: { color: l.color, width: name === "QQQ" || name === "EW universe" ? 1.8 : 2, dash: l.dash },
+           hovertemplate: fmt, connectgaps: false };
+};
+function renderCharts() {
+  const names = visible();
+  const legend = names.map((n) => `<span class="it">${swatch(n)}${esc(n)}</span>`).join("") || '<span class="it">No series selected</span>';
+  document.querySelectorAll(".legend").forEach((el) => { el.innerHTML = legend; });
+  const curves = Object.fromEntries(names.map((n) => [n, curve(n)]));
+  Plotly.react("eq", names.map((n) => lineOf(n, curves[n].x, curves[n].y, "$%{y:,.2f}")),
+    baseLayout({ type: "log", tickprefix: "$", tickformat: ",.2~f" }), PLOT_CONFIG);
+  Plotly.react("dd", names.map((n) => {
+    let peak = -Infinity;
+    const dd = curves[n].y.map((v) => { peak = Math.max(peak, v); return v / peak - 1; });
+    return lineOf(n, curves[n].x, dd, "%{y:.1%}");
+  }), baseLayout({ tickformat: ".0%", rangemode: "tozero" }), PLOT_CONFIG);
+  const [i0, i1] = window_(), x = D.dates.slice(i0, i1 + 1);
+  const isRet = state.roll === "ret";
+  Plotly.react("roll", names.map((n) => lineOf(n, x, D.rolling[n][state.roll].slice(i0, i1 + 1), isRet ? "%{y:.1%}" : "%{y:.2f}")),
+    baseLayout({ tickformat: isRet ? ".0%" : ".1f", zeroline: true, zerolinecolor: css("--line") }), PLOT_CONFIG);
+}
+
+/* ---------- year and cost tables ---------- */
+function renderAnnual() {
+  const years = [...new Set(S.flatMap((s) => Object.keys(D.annual[s.name])))].sort();
+  const p = period(), lastYear = D.meta.last.slice(0, 4);
+  const y0 = p.start ? p.start.slice(0, 4) : years[0];
+  const y1 = p.end ? String(+p.end.slice(0, 4) - 1) : years[years.length - 1];
+  const inP = (y) => y >= y0 && y <= y1;
+  const ytd = D.meta.last.slice(5) !== "12-31";
+  $("#annual").innerHTML = `<thead><tr><th class="l">Series</th>${years.map((y) =>
+    `<th class="${inP(y) ? "" : "dim"}">${y}${y === lastYear && ytd ? " YTD" : ""}</th>`).join("")}</tr></thead><tbody>` +
+    S.map((s) => `<tr class="${state.hidden.has(s.name) ? "off" : ""}"><td class="nm">${swatch(s.name)} ${esc(s.name)}</td>` + years.map((y) => {
+      const v = D.annual[s.name][y];
+      return `<td class="${inP(y) ? "" : "dim"}" style="${heatBg(v, 0.5)}">${pct(v)}</td>`;
+    }).join("") + "</tr>").join("") + "</tbody>";
+}
+function renderCosts() {
+  const levels = Object.keys(D.costs);
+  const base = String(D.meta.cost_bps);
+  $("#costs").innerHTML = `<thead><tr><th class="l">Series</th>${levels.map((b) =>
+    `<th>${b} bps${Math.abs(+b - +base) < 1e-9 ? " (base)" : ""}</th>`).join("")}</tr></thead><tbody>` +
+    S.map((s) => `<tr class="${state.hidden.has(s.name) ? "off" : ""}"><td class="nm">${swatch(s.name)} ${esc(s.name)}</td>` + levels.map((b) => {
+      const c = D.costs[b][s.name] || {};
+      return `<td style="${heatBg(c.CAGR, 0.3)}">${pct(c.CAGR)} · ${num2(c.Sharpe)}</td>`;
+    }).join("") + "</tr>").join("") + "</tbody>";
+  $("#defs").innerHTML = S.map((s) => `<dt>${swatch(s.name)} ${esc(s.name)}</dt><dd>${esc(s.desc)} <span class="hint">· rebalance ${esc(s.rebalance)}</span></dd>`).join("");
+}
+
+/* ---------- wiring ---------- */
+function renderAll() { renderStats(); renderCharts(); renderAnnual(); renderCosts(); }
+function syncButtons() {
+  document.querySelectorAll("[data-period]").forEach((b) => b.setAttribute("aria-pressed", b.dataset.period === state.period));
+  document.querySelectorAll("[data-roll]").forEach((b) => b.setAttribute("aria-pressed", b.dataset.roll === state.roll));
+}
+function init() {
+  initTheme(renderAll);
+  const m = D.meta;
+  $("#meta").textContent = `${m.universe} stocks · ${m.first} → ${m.last} · ${m.cost_bps} bps one-way · fills at ${m.execution}`;
+  $("#periods").innerHTML = D.periods.map((p) => `<button class="chip" data-period="${p.key}">${esc(p.label)}</button>`).join("");
+  $("#periods").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-period]"); if (!b) return;
+    state.period = b.dataset.period; store.set("bt.period", state.period); syncButtons(); renderAll();
+  });
+  $("#rollsel").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-roll]"); if (!b) return;
+    state.roll = b.dataset.roll; store.set("bt.roll", state.roll); syncButtons(); renderCharts();
+  });
+  $("#stats").addEventListener("change", (e) => {
+    const n = e.target.dataset.series; if (!n) return;
+    e.target.checked ? state.hidden.delete(n) : state.hidden.add(n);
+    store.set("bt.hidden", [...state.hidden]); renderAll();
+  });
+  $("#stats thead").addEventListener("click", (e) => {
+    const th = e.target.closest("th[data-k]"); if (!th) return;
+    const k = th.dataset.k;
+    if (state.sortKey === k) state.dir *= -1; else { state.sortKey = k; state.dir = k === "name" ? 1 : -1; }
+    renderStats();
+  });
+  $("#stats thead").addEventListener("keydown", (e) => { if (e.key === "Enter") e.target.click(); });
+  syncButtons(); renderAll();
+}
+init();
+</script>
+</body>
+</html>

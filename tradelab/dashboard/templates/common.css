@@ -1,0 +1,61 @@
+/* Shared tokens and base styles for tradelab pages (inlined at build time by pages.render). */
+:root {
+  color-scheme: light;
+  --bg: #f4f4f1; --surface: #fcfcfb; --ink: #0b0b0b; --ink2: #52514e; --muted: #86857f;
+  --line: #deddd8; --grid: #ecebe7; --hover: #f1f0ec; --select: #e6eefb;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --pos: #2a78d6; --neg: #e34948;
+  /* categorical slots, fixed order (validated palette) */
+  --c1: #2a78d6; --c2: #eb6834; --c3: #1baf7a; --c4: #eda100; --c5: #e87ba4; --c6: #008300; --c7: #4a3aa7; --c8: #e34948;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --bg: #111110; --surface: #1a1a19; --ink: #ffffff; --ink2: #c3c2b7; --muted: #8d8c84;
+    --line: #333331; --grid: #2a2a28; --hover: #232321; --select: #1d2b44;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --pos: #3987e5; --neg: #e66767;
+    --c1: #3987e5; --c2: #d95926; --c3: #199e70; --c4: #c98500; --c5: #d55181; --c6: #008300; --c7: #9085e9; --c8: #e66767;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #111110; --surface: #1a1a19; --ink: #ffffff; --ink2: #c3c2b7; --muted: #8d8c84;
+  --line: #333331; --grid: #2a2a28; --hover: #232321; --select: #1d2b44;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --pos: #3987e5; --neg: #e66767;
+  --c1: #3987e5; --c2: #d95926; --c3: #199e70; --c4: #c98500; --c5: #d55181; --c6: #008300; --c7: #9085e9; --c8: #e66767;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+.wrap { max-width: 1280px; margin: 0 auto; padding: 20px 16px 48px; }
+header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+h1 { font-size: 20px; margin: 0; font-weight: 650; }
+h2 { font-size: 15px; margin: 0; font-weight: 650; }
+.sub { color: var(--ink2); }
+.spacer { flex: 1; }
+button, input { font: inherit; color: var(--ink); }
+button { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+button:hover { background: var(--hover); }
+button:focus-visible, input:focus-visible, tr:focus-visible, th:focus-visible { outline: 2px solid var(--s1); outline-offset: 1px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
+section.card + section.card { margin-top: 16px; }
+.card-head { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; padding: 12px; border-bottom: 1px solid var(--line); }
+.chip { border-radius: 999px; padding: 4px 11px; font-size: 13px; color: var(--ink2); }
+.chip[aria-pressed="true"] { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+.seg { display: inline-flex; }
+.seg button { border-radius: 0; margin-left: -1px; }
+.seg button:first-child { border-radius: 6px 0 0 6px; margin-left: 0; }
+.seg button:last-child { border-radius: 0 6px 6px 0; }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+table { border-collapse: separate; border-spacing: 0; width: 100%; font-variant-numeric: tabular-nums; }
+th, td { padding: 6px 10px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--grid); }
+th { position: sticky; top: 0; background: var(--surface); color: var(--ink2); font-weight: 600; font-size: 12px; user-select: none; z-index: 2; border-bottom: 1px solid var(--line); }
+th[data-k] { cursor: pointer; }
+th.l, td.l { text-align: left; }
+th[aria-sort="ascending"]::after { content: " ▲"; font-size: 9px; }
+th[aria-sort="descending"]::after { content: " ▼"; font-size: 9px; }
+.tablewrap { overflow: auto; }
+.badge { display: inline-block; font-size: 11px; padding: 1px 7px; margin-left: 4px; border: 1px solid var(--line); border-radius: 999px; color: var(--ink2); }
+.swatch { width: 14px; height: 0; border-top: 2px solid; display: inline-block; vertical-align: middle; }
+details { padding: 10px 14px 14px; border-top: 1px solid var(--line); }
+summary { cursor: pointer; color: var(--ink2); }
+.note { margin-top: 14px; color: var(--muted); font-size: 12px; }
+.empty { padding: 40px; text-align: center; color: var(--ink2); }

@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tradelab"
+version = "0.1.0"
+description = "Nasdaq-100 data + low/mid-frequency backtesting framework"
+requires-python = ">=3.11"
+dependencies = ["yfinance", "pandas", "numpy", "pyarrow", "matplotlib", "requests", "plotly"]
+
+[project.optional-dependencies]
+dev = ["pytest", "mypy", "pandas-stubs"]
+
+[project.scripts]
+tradelab = "tradelab.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["tradelab*"]  # data/ and reports/ are runtime output, not packages
+
+[tool.setuptools.package-data]
+"tradelab.dashboard" = ["templates/*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

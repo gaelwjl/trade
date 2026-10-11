@@ -6,6 +6,10 @@ Timing convention -- no lookahead by construction:
   * On rebalance days the decision executes at the next bar's price: ``execution="next_open"``
     (default) fills at day t's open, ``"next_close"`` at day t's close.
   * Between rebalances positions drift with prices (no daily re-balancing).
+  * A position is closed at the first bar where it may no longer be held, rebalance day or not:
+    the stock left the index (``panel.members``; changes are announced in advance, so this is the
+    first bar of the new composition) or it stopped trading (sold at its last price). Targets on
+    such names are dropped, and the freed cash waits for the next rebalance.
   * Equity is marked at the execution price series (open or close), so returns are
     open-to-open (or close-to-close) with the position changes landing exactly on those marks.
 
@@ -154,6 +158,14 @@ def backtest(
         W[idx < pd.Timestamp(start)] = 0.0
 
     valid = px.notna().to_numpy()
+    # members[t - 1]: in the index at bar t (the mask looks one session ahead)
+    member = (
+        np.ones(px.shape, dtype=bool)
+        if panel.members is None
+        else panel.members.reindex(index=idx, columns=cols, fill_value=False).to_numpy(
+            bool
+        )
+    )
     X = px.ffill().to_numpy(
         float
     )  # stale-forward so a missing day is a 0% return, not a crash
@@ -184,9 +196,16 @@ def backtest(
         eq *= 1.0 + pr
         if abs(1.0 + pr) > 1e-12:
             w = w * (1.0 + ret) / (1.0 + pr)
-        # trade: decision made at the previous close executes now
+        # trade: decision made at the previous close executes now; names that may no longer be
+        # held are sold now even between rebalances
+        allowed = valid[t] & member[t - 1]
         if decide[t - 1]:
-            tgt = np.where(valid[t], W[t - 1], 0.0)
+            tgt = np.where(allowed, W[t - 1], 0.0)
+        elif (w[~allowed] != 0).any():
+            tgt = np.where(allowed, w, 0.0)
+        else:
+            tgt = None
+        if tgt is not None:
             trade = np.abs(tgt - w).sum()
             eq *= 1.0 - trade * c1
             turnover[t], cost_frac[t] = trade, trade * c1

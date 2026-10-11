@@ -36,6 +36,7 @@ from .backtest import runner
 from .backtest.engine import CostModel
 from .data import fetch as fetcher
 from .data import market_calendar as cal
+from .data import membership
 from .data.prices import DATA_DIR, NASDAQ100, ROOT, Panel, last_cached_date
 from .live import screener, signals
 from .store import daily as daily_store
@@ -44,7 +45,7 @@ from .store import strategies as strat_store
 from .store.db import DB_PATH, open_db, session_scope, must_get
 from .store.models import BacktestRunRow
 from .strategies.registry import REGISTRY
-from .types import StatsTable
+from .types import MembershipTable, StatsTable
 from .web import backtests_page, plots, screener_page, signals_page
 
 REPORTS = ROOT / "reports"
@@ -53,7 +54,7 @@ PAGES = {
     "backtests": REPORTS / "backtests.html",
     "signals": REPORTS / "signals.html",
 }
-DISCLAIMER = "(mechanical strategy output on a survivorship-biased universe; not investment advice)"
+DISCLAIMER = "(mechanical strategy output; not investment advice)"
 SERVICES = {
     "serve": ["serve"],
     "worker": ["worker"],
@@ -237,11 +238,31 @@ def cmd_fetch(_: argparse.Namespace) -> None:
         held = ledger.traded_symbols(s)
     rep = fetcher.refresh(extra_symbols=held)
     print(f"Constituents: {rep.constituents} (as of {rep.as_of})")
-    print(
-        f"Downloaded {len(rep.requested) - len(rep.missing)}/{len(rep.requested)} symbols"
-    )
+    print(f"Requested {len(rep.requested)} symbols (current members, index, holdings")
+    print("  and former members not yet cached)")
     if rep.missing:
         print(f"MISSING: {rep.missing}")
+    for note in rep.notes:
+        print(f"Membership: {note}")
+    if rep.kept_cache:
+        print(
+            f"Yahoo returned less history than cached, kept the cache: {rep.kept_cache}"
+        )
+    m = rep.membership
+    gone = membership.spells_of(MembershipTable(m[~m["priced"]]))
+    print(
+        f"\nIndex membership since 2007: {len(m)} spells, {m['symbol'].nunique()} stocks; "
+        f"{len(gone)} spells without usable Yahoo prices (left out of backtests):"
+    )
+    print(
+        "  "
+        + ", ".join(
+            f"{r.ticker} ({r.start:%Y}-{'now' if r.end is None else f'{r.end:%Y}'})"
+            for r in gone
+        )
+    )
+    print("Share of member-days with prices, by year:")
+    print("  " + "  ".join(f"{y} {v:.0%}" for y, v in rep.coverage.items()))
     q = rep.quality
     print("\nData quality (earliest histories, then shortest):")
     print(q.head(5).to_string())
@@ -375,7 +396,7 @@ def cmd_backtest(a: argparse.Namespace) -> None:
 
 
 def cmd_report(a: argparse.Namespace) -> None:
-    panel = Panel.load()
+    panel = Panel.load_index()
     costs = CostModel(a.commission_bps, a.slippage_bps)
     res = runner.run_suite(
         panel,
@@ -386,7 +407,7 @@ def cmd_report(a: argparse.Namespace) -> None:
         a.cash_rate,
     )
     print(
-        f"Universe: {len(panel.symbols)} CURRENT Nasdaq-100 members (survivorship-biased) | "
+        f"Universe: point-in-time Nasdaq-100 ({len(panel.symbols)} members since 2007 with Yahoo prices) | "
         f"{a.start} -> {panel.close.index[-1].date()} | one-way cost {costs.one_way * 1e4:.0f} bps\n"
     )
     print("FULL PERIOD  (Beta/Alpha/Corr vs QQQ)")
@@ -403,7 +424,7 @@ def cmd_report(a: argparse.Namespace) -> None:
     png = plots.suite_png(
         res,
         REPORTS / "suite.png",
-        "Strategy suite vs QQQ (survivor universe, net of costs)",
+        "Strategy suite vs QQQ (point-in-time Nasdaq-100, net of costs)",
     )
     print(f"chart -> {png}")
 
@@ -465,7 +486,7 @@ def build_pages(which: list[str], a: argparse.Namespace) -> list[Path]:
         elif page == "backtests":
             backtests_page.build(
                 out,
-                getattr(a, "start", "2005-01-01"),
+                getattr(a, "start", "2007-01-01"),
                 getattr(a, "split", "2018-01-01"),
                 [float(x) for x in getattr(a, "costs", "0,5,10,20").split(",")],
             )
@@ -572,7 +593,7 @@ def parser() -> argparse.ArgumentParser:
     bs.add_argument("strategy", choices=list(REGISTRY))
     bs.add_argument("--params", help='JSON, e.g. {"lookback": 126}')
     bs.add_argument("--grid", help='JSON, e.g. {"window": [100, 200]}')
-    bs.add_argument("--start", default="2005-01-01")
+    bs.add_argument("--start", default="2007-01-01")
     bs.add_argument("--split", default="2018-01-01")
     bs.add_argument("--commission-bps", type=float, default=1.0)
     bs.add_argument("--slippage-bps", type=float, default=4.0)
@@ -583,7 +604,7 @@ def parser() -> argparse.ArgumentParser:
     b.set_defaults(fn=cmd_backtest)
 
     r = sub.add_parser("report", help="backtest every strategy now")
-    r.add_argument("--start", default="2005-01-01")
+    r.add_argument("--start", default="2007-01-01")
     r.add_argument("--end", default=None)
     r.add_argument(
         "--split", default="2018-01-01", help="in-sample / out-of-sample boundary"
@@ -618,7 +639,7 @@ def parser() -> argparse.ArgumentParser:
     d.add_argument(
         "--years", type=int, default=2, help="screener: years of chart history"
     )
-    d.add_argument("--start", default="2005-01-01", help="backtests: first date")
+    d.add_argument("--start", default="2007-01-01", help="backtests: first date")
     d.add_argument(
         "--split", default="2018-01-01", help="backtests: in/out-of-sample boundary"
     )

@@ -98,14 +98,14 @@ def build_payload(
 
 def build(
     out: Path,
-    start: str = "2005-01-01",
+    start: str = "2007-01-01",
     split: str = "2018-01-01",
     cost_bps: list[float] | None = None,
     base: CostModel = CostModel(),
     execution: str = "next_open",
 ) -> dict:
     payload = build_payload(
-        Panel.load(), start, split, cost_bps or [0, 5, 10, 20], base, execution
+        Panel.load_index(), start, split, cost_bps or [0, 5, 10, 20], base, execution
     )
     render.write("backtests.html", payload, out)
     return payload
@@ -114,7 +114,7 @@ def build(
 def benchmarks(start: str, base: CostModel, execution: str) -> dict[str, Result]:
     kw = dict(start=start, costs=base, execution=execution)
     return {
-        "EW universe": universe_benchmark(Panel.load(), **kw),
+        "EW universe": universe_benchmark(Panel.load_index(), **kw),
         "QQQ": etf_benchmark("QQQ", **kw),
     }
 
@@ -189,7 +189,7 @@ def compare_payload(
     levels = sorted({k for c in costs.values() for k in c}, key=float)
     return {
         "meta": {
-            "universe": len(Panel.load().symbols),
+            "universe": len(Panel.load_index().symbols),
             "first": str(dates[0].date()),
             "last": str(dates[-1].date()),
             "split": str(first.split),

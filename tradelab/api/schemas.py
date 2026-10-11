@@ -62,7 +62,7 @@ class BacktestIn(BaseModel):
     grid: dict[str, list] = Field(
         default_factory=dict
     )  # each combination becomes a run
-    start: dt.date = dt.date(2005, 1, 1)
+    start: dt.date = dt.date(2007, 1, 1)
     end: dt.date | None = None
     split: dt.date = dt.date(2018, 1, 1)
     commission_bps: float = 1.0

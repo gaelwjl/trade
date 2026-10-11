@@ -10,12 +10,12 @@ import pandas as pd
 from ..data.prices import NASDAQ100, Panel
 from ..strategies.library import equal_weight
 from ..strategies.registry import REGISTRY, StrategySpec
-from ..types import Mask, StatsTable, Weights
+from ..types import StatsTable, Weights
 from .engine import CostModel, Result, backtest
 
 BENCHMARKS = {
-    "EW universe": "Equal weight of every stock in the (survivor) universe, monthly rebalance. Shares the "
-    "universe's survivorship bias, so it is the fair yardstick.",
+    "EW universe": "Equal weight of every stock in the index at the time (that Yahoo still prices), "
+    "monthly rebalance. Same universe as the strategies, so it is the fair yardstick.",
     "QQQ": "Buy and hold the Nasdaq-100 ETF.",
 }
 
@@ -54,10 +54,10 @@ def sweep(
 
 
 def universe_benchmark(panel: Panel, **engine_kw) -> Result:
-    """Equal-weight, monthly-rebalanced buy-and-hold of the same (survivor) universe. The fair yardstick."""
+    """Equal-weight, monthly-rebalanced buy-and-hold of the same universe. The fair yardstick."""
     return backtest(
         panel,
-        equal_weight(Mask(panel.close.notna())),
+        equal_weight(panel.eligible),
         rebalance="M",
         name="EW universe",
         **engine_kw,
@@ -77,13 +77,15 @@ def etf_benchmark(symbol: str = "QQQ", **engine_kw) -> Result:
 
 def run_suite(
     panel: Panel,
-    start: str | None = "2005-01-01",
+    start: str | None = "2007-01-01",
     end: str | None = None,
     costs: CostModel = CostModel(),
     execution: str = "next_open",
     cash_rate: float = 0.0,
 ) -> dict[str, Result]:
-    """Every registered strategy plus the two benchmarks. ``panel`` is the Nasdaq-100 universe."""
+    """Every registered strategy plus the two benchmarks. ``panel`` is the point-in-time Nasdaq-100
+    (``Panel.load_index``); membership history starts in 2007, so earlier starts add nothing.
+    """
     kw = dict(
         start=start, end=end, costs=costs, execution=execution, cash_rate=cash_rate
     )

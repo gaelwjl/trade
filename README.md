@@ -43,7 +43,7 @@ Dependencies point downward: `cli`, `api` and `web` use the packages below them;
 
 | Package | Modules | Responsibility |
 |---|---|---|
-| `data` | `prices`, `market_calendar`, `fetch` | constituents, adjusted-price cache, raw closes + corporate actions, `Panel`, NYSE calendar |
+| `data` | `prices`, `membership`, `market_calendar`, `fetch` | constituents, point-in-time index membership, adjusted-price cache, raw closes + corporate actions, `Panel`, NYSE calendar |
 | `strategies` | `indicators`, `library`, `registry` | indicators; strategy functions + the score each decides on; `REGISTRY` of `StrategySpec`s |
 | `backtest` | `engine`, `metrics`, `runner`, `analysis` | `backtest(...)`, stats, suite/sweeps/benchmarks, period/annual/rolling/cost analytics |
 | `live` | `signals`, `screener`, `portfolio`, `suggestions` | per-day `Decision`s, screener, FIFO P&L engine, suggested-order sizing (all pure) |
@@ -66,6 +66,23 @@ Weights in row *t* use data through day *t*'s close and execute at day *t+1*'s o
 peeks ahead. Rebalance days are the last NYSE session of each week/month; a still-running period is
 never treated as ended.
 
+## Universe (point-in-time index)
+Backtests use the Nasdaq-100 as it was on each date, not today's members. `tradelab fetch` rebuilds
+`data/membership.csv` from the change history in
+[jmccarrell/n100tickers](https://github.com/jmccarrell/n100tickers) (MIT; coverage from 2007), checks
+it against Nasdaq's live list, and downloads prices for former members as well. `Panel.load_index()`
+returns every member since 2007 with usable prices plus a `members` mask:
+- Strategies only pick from `panel.eligible`, the names in the index at the next session (Nasdaq
+  announces changes days ahead). Indicators still use each stock's full price history.
+- The engine sells a stock at the first bar after it leaves the index, or when its prices stop
+  (delisting, sold at the last price), even between rebalances. The cash waits for the next rebalance.
+- Ticker changes: membership lists the ticker traded at the time, while Yahoo files a renamed
+  company's whole history under its new symbol. `membership.ALIASES` maps renames onto that symbol
+  (FB -> META is one continuous holding) and blanks out spells whose old ticker Yahoo now uses for
+  another company (e.g. MNST before 2012 was Monster Worldwide). A spell whose Yahoo history starts
+  after the spell began is treated as unpriced, which catches most reused tickers automatically.
+- Add an alias when `fetch` lists a renamed company among the unpriced spells.
+
 ## Adding a strategy
 Write the function (and its score) in `strategies/library.py`, then register it; backtests, signals and
 every page pick it up.
@@ -75,17 +92,23 @@ def breakout_score(p: Panel, n: int = 20, **_: object) -> Scores:
 
 def breakout(p: Panel, n: int = 20) -> Weights:
     """Long names at a new n-day high."""
-    return equal_weight(Mask(breakout_score(p, n) >= 0))
+    return equal_weight(Mask((breakout_score(p, n) >= 0) & p.eligible))
 
 # strategies/registry.py
 StrategySpec("breakout_20d", "Breakout", lib.breakout, lib.breakout_score, "vs 20d high", "return", "W")
 ```
-Explore parameters with a grid on the Backtests page, or `runner.sweep(Panel.load(), REGISTRY["breakout_20d"], {"n": [10, 20, 55]})`.
+Combine every pick with `p.eligible` (as above) so the strategy only holds index members of the day.
+Explore parameters with a grid on the Backtests page, or `runner.sweep(Panel.load_index(), REGISTRY["breakout_20d"], {"n": [10, 20, 55]})`.
 
 ## Known limitations
-- **Survivorship bias (large).** The universe is today's Nasdaq-100 members applied to the past. Compare
-  strategies to the `EW universe` benchmark (same bias), not just QQQ. Long-short strategies can't be
-  promoted to active.
+- **Survivorship bias (reduced, not gone).** Membership is point-in-time, but Yahoo has no prices for many
+  former members (acquired or delisted companies, and recycled tickers): about 57% of member-days are
+  priced in 2007, 80% in 2017 and 95%+ from 2022 (`tradelab fetch` prints the table). Membership history
+  starts in 2007, so backtests do too. Compare strategies to the `EW universe` benchmark (same universe),
+  not just QQQ.
+- Yahoo deletes a company's history after it delists; the price cache is never overwritten with a
+  shorter download, so keep `data/prices` (and back it up) to hold on to histories Yahoo drops later.
+- Long-short strategies can't be promoted to active.
 - Yahoo data is unofficial and can contain errors; the daily job refuses to suggest orders from stale data.
 - Cash earns 0% in backtests (`--cash-rate`); Sharpe uses rf = 0. One-off market closures and early closes
   are not in the calendar.

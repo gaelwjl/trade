@@ -101,7 +101,7 @@ def strategies_payload(days: int = 63, now: pd.Timestamp | None = None) -> dict:
             "expected": str(expected),
             "stale": as_of < expected,
             "built": str(pd.Timestamp.now(tz=MARKET_TZ).strftime("%Y-%m-%d %H:%M %Z")),
-            "universe": len(universe.symbols),
+            "universe": int(universe.eligible.iloc[-1].sum()),
         },
         "dates": [str(d.date()) for d in universe.close.index[-days:]],
         "names": {

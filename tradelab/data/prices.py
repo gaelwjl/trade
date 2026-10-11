@@ -1,12 +1,14 @@
 """Nasdaq-100 constituents + Yahoo Finance price cache.
 
 Prices are stored split- and dividend-adjusted (yfinance ``auto_adjust=True``), one parquet
-file per symbol under ``data/prices``. Use ``Panel.load()`` to get wide date x symbol frames.
+file per symbol under ``data/prices``. Use ``Panel.load()`` to get wide date x symbol frames of
+today's members, or ``Panel.load_index()`` for the point-in-time index that backtests need.
 """
 
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import re
 import warnings
 from dataclasses import dataclass
@@ -17,14 +19,16 @@ import requests
 import yfinance as yf
 
 from ..types import Bars, ConstituentTable, Mask, PriceFrame, ReturnFrame
+from . import membership
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = ROOT / "data"
 PRICES_DIR = DATA_DIR / "prices"
 CONSTITUENTS_PATH = DATA_DIR / "constituents.csv"
+MEMBERSHIP_PATH = DATA_DIR / "membership.csv"
 
 INDEX_SYMBOLS = ["^NDX", "^IXIC", "QQQ"]
-NASDAQ100 = "nasdaq100"  # universe name for the current constituents
+NASDAQ100 = "nasdaq100"  # universe name for the point-in-time index (Panel.load_index)
 FIELDS = ["Open", "High", "Low", "Close", "Volume"]
 
 MARKET_TZ = "America/New_York"
@@ -108,7 +112,21 @@ def _clean(df: Bars) -> Bars:
 
 
 def download_prices(symbols: list[str], batch_size: int = 25) -> dict[str, Bars]:
-    """Full-history adjusted daily bars. Retries any symbol missing from the batch download."""
+    """Full-history adjusted daily bars. Retries any symbol missing from the batch download.
+
+    Symbols Yahoo doesn't know are left out of the result (callers report them); yfinance's own
+    "possibly delisted" logging is muted, since many former index members are.
+    """
+    log = logging.getLogger("yfinance")
+    level = log.level
+    log.setLevel(logging.CRITICAL)
+    try:
+        return _download(symbols, batch_size)
+    finally:
+        log.setLevel(level)
+
+
+def _download(symbols: list[str], batch_size: int) -> dict[str, Bars]:
     out: dict[str, Bars] = {}
     for i in range(0, len(symbols), batch_size):
         batch = symbols[i : i + batch_size]
@@ -192,10 +210,24 @@ def interior_gaps(close: PriceFrame) -> Mask:
     return Mask(close.isna() & close.ffill().notna() & close.bfill().notna())
 
 
-def save_prices(frames: dict[str, Bars]) -> None:
+def save_prices(frames: dict[str, Bars]) -> list[str]:
+    """Write the cache. Returns symbols whose cached history was kept instead.
+
+    A download that starts later and has fewer bars than the cache is not saved: Yahoo purges a
+    delisted company's history (or hands its ticker to someone else), and the cache may be the only
+    copy left.
+    """
     PRICES_DIR.mkdir(parents=True, exist_ok=True)
+    kept = []
     for s, df in frames.items():
-        df.to_parquet(price_path(s))
+        path = price_path(s)
+        if path.exists():
+            old = pd.read_parquet(path, columns=["Close"]).index
+            if len(old) > len(df) and df.index[0] > old[0] + membership.GRACE:
+                kept.append(s)
+                continue
+        df.to_parquet(path)
+    return kept
 
 
 def _short_runs(gap: pd.Series, max_len: int) -> pd.Series:
@@ -216,6 +248,9 @@ class Panel:
     filled: Mask | None = (
         None  # bars that were missing and forward-filled by ``from_frames``
     )
+    # index membership at the session after each date (see ``membership.member_mask``);
+    # None = every priced symbol is in the universe
+    members: Mask | None = None
 
     @classmethod
     def load(
@@ -223,7 +258,8 @@ class Panel:
     ) -> "Panel":
         """Load cached prices.
 
-        Default universe: current Nasdaq-100 constituents, one share class per company when
+        Default universe: current Nasdaq-100 constituents (for live views; backtests need the
+        point-in-time ``load_index``), one share class per company when
         ``dedupe`` (otherwise GOOG and GOOGL count as two independent stocks). Interior gaps of up
         to ``max_gap`` bars are forward-filled (see ``from_frames``).
         """
@@ -248,9 +284,37 @@ class Panel:
         )
 
     @classmethod
+    def load_index(cls, dedupe: bool = True, max_gap: int = 5) -> "Panel":
+        """Point-in-time Nasdaq-100: every stock that was a member since 2007 and has usable prices.
+
+        ``members`` says which of them were in the index at each date, so strategies only pick from
+        the index of the day and the engine sells a stock when it leaves. Former members Yahoo no
+        longer prices are absent (see ``membership``). ``dedupe`` keeps one share class per company.
+        """
+        spells = membership.load(MEMBERSHIP_PATH)
+        p = cls.load(sorted(spells["symbol"].dropna().unique()), max_gap=max_gap)
+        first = {
+            s: pd.DatetimeIndex(c.index)[0]
+            for s in p.symbols
+            if len(c := p.close[s].dropna())
+        }
+        spells = membership.mark_priced(spells, first)
+        members = membership.member_mask(spells, pd.DatetimeIndex(p.close.index), dedupe)
+        keep = list(members.columns)
+        return cls(
+            open=PriceFrame(p.open[keep]),
+            high=PriceFrame(p.high[keep]),
+            low=PriceFrame(p.low[keep]),
+            close=PriceFrame(p.close[keep]),
+            volume=PriceFrame(p.volume[keep]),
+            filled=Mask(p.filled[keep]) if p.filled is not None else None,
+            members=members,
+        )
+
+    @classmethod
     def load_universe(cls, universe: str) -> "Panel":
-        """``"nasdaq100"``: current constituents (one share class each); anything else: that one symbol."""
-        return cls.load() if universe == NASDAQ100 else cls.load([universe])
+        """``"nasdaq100"``: the point-in-time index (``load_index``); anything else: that one symbol."""
+        return cls.load_index() if universe == NASDAQ100 else cls.load([universe])
 
     @classmethod
     def from_frames(cls, frames: dict[str, PriceFrame], max_gap: int = 5) -> "Panel":
@@ -292,3 +356,10 @@ class Panel:
     @property
     def symbols(self) -> list[str]:
         return list(self.close.columns)
+
+    @property
+    def eligible(self) -> Mask:
+        """What a decision at each date's close may hold: priced that day and, for an index
+        universe, in the index at the next session."""
+        priced = self.close.notna()
+        return Mask(priced if self.members is None else priced & self.members)

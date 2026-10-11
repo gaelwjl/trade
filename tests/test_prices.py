@@ -66,3 +66,20 @@ def test_short_gaps_filled_long_gaps_and_prelisting_left_alone():
     assert p.close["A"].iloc[10:17].isna().all()
     assert p.close["B"].iloc[:4].isna().all()
     assert p.filled is not None and int(p.filled.to_numpy().sum()) == 1
+
+
+def test_save_prices_keeps_a_longer_cached_history(tmp_path, monkeypatch):
+    from tradelab.data import prices
+
+    monkeypatch.setattr(prices, "PRICES_DIR", tmp_path)
+    full = Bars(
+        pd.DataFrame({"Close": 1.0}, index=pd.bdate_range("2010-01-01", periods=500))
+    )
+    prices.save_prices({"OLD": full, "NEW": full})
+    stub = Bars(full.iloc[-1:])  # Yahoo purged a delisted company: one bar left
+    longer = Bars(
+        pd.DataFrame({"Close": 2.0}, index=pd.bdate_range("2009-01-01", periods=800))
+    )
+    assert prices.save_prices({"OLD": stub, "NEW": longer}) == ["OLD"]
+    assert len(pd.read_parquet(prices.price_path("OLD"))) == 500
+    assert len(pd.read_parquet(prices.price_path("NEW"))) == 800

@@ -34,6 +34,8 @@ Bars = NewType("Bars", pd.DataFrame)
 # --- one row per entity ---
 # index members: symbol, name, market_cap, as_of
 ConstituentTable = NewType("ConstituentTable", pd.DataFrame)
+# one row per index membership spell: ticker (as traded), symbol (Yahoo), start, end (NaT = current)
+MembershipTable = NewType("MembershipTable", pd.DataFrame)
 # screener snapshot, indexed by symbol
 ScreenTable = NewType("ScreenTable", pd.DataFrame)
 # performance stats, one row per strategy / param combo

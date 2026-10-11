@@ -37,7 +37,7 @@ dd { margin: 0; color: var(--ink2); }
     <button id="theme" title="Toggle light / dark">Theme</button>
   </header>
   <p class="lede">
-    Compare each strategy with <b>EW universe</b>, not just QQQ: both hold the same survivor-biased stocks,
+    Compare each strategy with <b>EW universe</b>, not just QQQ: both pick from the same index members,
     so beating EW is the real test. A strategy that only wins <b>in-sample</b> is probably fitted to the past,
     and one whose CAGR collapses in the <b>cost</b> table needs cheaper execution than you can get.
   </p>
@@ -83,7 +83,8 @@ dd { margin: 0; color: var(--ink2); }
   </section>
 
   <p class="note">
-    Universe: current Nasdaq-100 members applied to the past (survivorship-biased: absolute numbers are inflated).
+    Universe: the Nasdaq-100 as it was on each date since 2007; a stock is sold when it leaves the index.
+    Former members Yahoo no longer prices (mostly acquired or delisted companies) are missing, so some survivorship bias remains.
     Signals use data through each close and trade at the next bar. Cash earns 0%. For research only, not investment advice.
   </p>
 </div>
@@ -239,7 +240,7 @@ function syncButtons() {
 function init() {
   initTheme(renderAll);
   const m = D.meta;
-  $("#meta").textContent = `${m.universe} stocks · ${m.first} → ${m.last} · ${m.cost_bps} bps one-way · fills at ${m.execution}`;
+  $("#meta").textContent = `${m.universe} stocks ever in the index · ${m.first} → ${m.last} · ${m.cost_bps} bps one-way · fills at ${m.execution}`;
   $("#periods").innerHTML = D.periods.map((p) => hasData(p)
     ? `<button class="chip" data-period="${p.key}">${esc(p.label)}</button>`
     : `<button class="chip" data-period="${p.key}" disabled title="No data in this period: the split is at or after the last price (${esc(D.meta.last)})">${esc(p.label)}</button>`).join("");

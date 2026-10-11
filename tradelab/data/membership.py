@@ -144,7 +144,9 @@ def parse_changes(docs: list[str]) -> MembershipTable:
                 out.append(Spell(t, t, since.pop(t), d))
             for t in change.get("union") or []:
                 if t in since:
-                    raise ValueError(f"{day}: {t} joins the index but is already a member")
+                    raise ValueError(
+                        f"{day}: {t} joins the index but is already a member"
+                    )
                 since[t] = d
     out += [Spell(t, t, s, None) for t, s in since.items()]
     return table_of(sorted(out, key=lambda s: (s.start, s.ticker)))
@@ -224,8 +226,14 @@ def reconcile(
         for s in spells_of(table)
     ]
     spells += [Spell(s, s, day, None) for s in sorted(want - have)]
-    notes = [f"{s} left the index (Nasdaq's list), not yet in the history" for s in sorted(have - want)]
-    notes += [f"{s} joined the index (Nasdaq's list), not yet in the history" for s in sorted(want - have)]
+    notes = [
+        f"{s} left the index (Nasdaq's list), not yet in the history"
+        for s in sorted(have - want)
+    ]
+    notes += [
+        f"{s} joined the index (Nasdaq's list), not yet in the history"
+        for s in sorted(want - have)
+    ]
     return table_of(spells), notes
 
 

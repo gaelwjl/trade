@@ -18,7 +18,9 @@ class FetchReport:
     constituents: int
     as_of: str
     requested: list[str]
-    missing: list[str]  # current members, index symbols or holdings Yahoo returned nothing for
+    missing: list[
+        str
+    ]  # current members, index symbols or holdings Yahoo returned nothing for
     quality: QualityTable  # first/last date, rows, interior gaps, largest daily move, zero-volume days
     membership: MembershipTable  # spells with ``priced``
     coverage: pd.Series  # by year: share of member-days with usable prices

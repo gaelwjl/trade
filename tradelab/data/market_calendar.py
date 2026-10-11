@@ -4,6 +4,7 @@ Rules-based (no data download). Covers the regular holiday schedule; one-off clo
 days of mourning) and early closes are not modelled. Used only to look *forward* (next session,
 whether a date is the last session of its week/month); history comes from the price data itself.
 """
+
 from __future__ import annotations
 
 import datetime as dt
@@ -27,7 +28,11 @@ def _last_weekday(year: int, month: int, weekday: int) -> Date:
 
 def _observed(d: Date) -> Date:
     """Saturday holidays move to Friday, Sunday holidays to Monday."""
-    return d - dt.timedelta(days=1) if d.weekday() == 5 else d + dt.timedelta(days=1) if d.weekday() == 6 else d
+    return (
+        d - dt.timedelta(days=1)
+        if d.weekday() == 5
+        else d + dt.timedelta(days=1) if d.weekday() == 6 else d
+    )
 
 
 @lru_cache(maxsize=None)
@@ -43,7 +48,9 @@ def nyse_holidays(year: int) -> frozenset[Date]:
         _observed(dt.date(year, 12, 25)),
     }
     new_year = dt.date(year, 1, 1)
-    if new_year.weekday() != 5:  # NYSE does not observe a Saturday New Year's Day on the prior Friday
+    if (
+        new_year.weekday() != 5
+    ):  # NYSE does not observe a Saturday New Year's Day on the prior Friday
         h.add(_observed(new_year))
     if year >= 2022:
         h.add(_observed(dt.date(year, 6, 19)))  # Juneteenth

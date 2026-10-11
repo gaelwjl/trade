@@ -299,7 +299,9 @@ class Panel:
             if len(c := p.close[s].dropna())
         }
         spells = membership.mark_priced(spells, first)
-        members = membership.member_mask(spells, pd.DatetimeIndex(p.close.index), dedupe)
+        members = membership.member_mask(
+            spells, pd.DatetimeIndex(p.close.index), dedupe
+        )
         keep = list(members.columns)
         return cls(
             open=PriceFrame(p.open[keep]),

@@ -8,7 +8,7 @@ import math
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from ..data.prices import Panel
+from ..data.prices import Panel, last_cached_date
 from ..live import portfolio as pf
 from ..live import signals
 from ..live.suggestions import SizingRules, for_strategy
@@ -63,6 +63,7 @@ def submit(body: BacktestIn, s: Session = Depends(db)) -> list[dict]:
         raise HTTPException(400, f"unknown strategy {body.strategy!r}")
     if body.execution not in ("next_open", "next_close"):
         raise HTTPException(400, "execution must be next_open or next_close")
+    runs.check_dates(body.start, body.split, body.end, last_cached_date())
     keys = list(body.grid)
     combos = list(itertools.product(*body.grid.values())) if keys else [()]
     if len(combos) > 200:

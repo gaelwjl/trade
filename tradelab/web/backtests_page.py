@@ -15,6 +15,7 @@ from ..store import runs as run_store
 from ..store import strategies as strat_store
 from ..store.models import BacktestResultRow, BacktestRunRow, StrategyConfigRow
 from ..strategies.registry import REGISTRY
+from ..types import StatsTable
 from ..store.db import must_get
 from . import render
 
@@ -26,7 +27,7 @@ def _describe(name: str) -> str:
     return BENCHMARKS[name] if name in BENCHMARKS else REGISTRY[name].description
 
 
-def _table(t: pd.DataFrame) -> dict[str, dict]:
+def _table(t: StatsTable) -> dict[str, dict]:
     return {
         str(k): {c: render.plain(v) for c, v in row.items()} for k, row in t.iterrows()
     }

@@ -36,7 +36,7 @@ from .backtest import runner
 from .backtest.engine import CostModel
 from .data import fetch as fetcher
 from .data import market_calendar as cal
-from .data.prices import DATA_DIR, NASDAQ100, ROOT, Panel
+from .data.prices import DATA_DIR, NASDAQ100, ROOT, Panel, last_cached_date
 from .live import screener, signals
 from .store import daily as daily_store
 from .store import ledger, runs, views
@@ -330,6 +330,12 @@ def cmd_portfolio(a: argparse.Namespace) -> None:
 def cmd_backtest(a: argparse.Namespace) -> None:
     with session_scope(_engine()) as s:
         if a.action == "submit":
+            runs.check_dates(
+                dt.date.fromisoformat(a.start),
+                dt.date.fromisoformat(a.split),
+                None,
+                last_cached_date(),
+            )
             params = json.loads(a.params) if a.params else {}
             grid = json.loads(a.grid) if a.grid else {}
             import itertools

@@ -11,23 +11,46 @@ from sqlalchemy import CursorResult, func, select, update
 from sqlalchemy.orm import Session
 
 from ..data.prices import DATA_DIR
+from ..types import RunCurves
 from .models import BacktestResultRow, BacktestRunRow, JobRunRow, utcnow
 
 RUNS_DIR = DATA_DIR / "runs"  # one parquet per run: equity, turnover, costs, exposure
 
 
-def save_curves(run_id: int, curves: pd.DataFrame) -> str:
+def save_curves(run_id: int, curves: RunCurves) -> str:
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
     path = RUNS_DIR / f"run_{run_id}.parquet"
     curves.to_parquet(path)
     return str(path.relative_to(DATA_DIR))
 
 
-def curves(result: BacktestResultRow) -> pd.DataFrame:
-    return pd.read_parquet(DATA_DIR / result.equity_path)
+def curves(result: BacktestResultRow) -> RunCurves:
+    return RunCurves(pd.read_parquet(DATA_DIR / result.equity_path))
 
 
 # ---------- backtest runs ----------
+MIN_PERIOD_DAYS = 90  # calendar days of data required on each side of the split
+
+
+def check_dates(
+    start: dt.date, split: dt.date, end: dt.date | None, data_last: dt.date | None
+) -> None:
+    """Reject runs whose in-sample or out-of-sample period would be (nearly) empty."""
+    # without cached prices, today bounds the data: a future split never has out-of-sample data
+    last = min(d for d in (end, data_last or dt.date.today()) if d is not None)
+    if end is not None and end <= start:
+        raise ValueError(f"end {end} must be after start {start}")
+    if (split - start).days < MIN_PERIOD_DAYS:
+        raise ValueError(
+            f"split {split} must be at least {MIN_PERIOD_DAYS} days after start {start}"
+        )
+    if (last - split).days < MIN_PERIOD_DAYS:
+        raise ValueError(
+            f"split {split} leaves under {MIN_PERIOD_DAYS} days of out-of-sample data "
+            f"(prices end {last}); pick a split before {last - dt.timedelta(days=MIN_PERIOD_DAYS)}"
+        )
+
+
 def submit(s: Session, rows: list[BacktestRunRow]) -> list[BacktestRunRow]:
     """Queue runs; several rows (a parameter grid) share one ``sweep_id``."""
     sweep = None

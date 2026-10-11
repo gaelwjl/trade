@@ -46,3 +46,5 @@ QualityTable = NewType("QualityTable", pd.DataFrame)
 PositionTable = NewType("PositionTable", pd.DataFrame)
 # one row per session: equity, cash, P&L parts, time-weighted return index
 SnapshotTable = NewType("SnapshotTable", pd.DataFrame)
+# one row per session of a stored backtest: equity, turnover, costs, exposure
+RunCurves = NewType("RunCurves", pd.DataFrame)

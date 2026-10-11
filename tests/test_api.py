@@ -117,3 +117,15 @@ def test_strategies_watchlist_and_pages(client):
     for path in ["/", "/portfolio", "/strategy", "/backtests", "/settings"]:
         r = client.get(path)
         assert r.status_code == 200 and "topnav" in r.text
+
+
+def test_backtest_split_without_out_of_sample_data_is_rejected(client):
+    r = client.post(
+        "/api/backtests",
+        json={
+            "strategy": "momentum_12_1",
+            "start": "2015-01-01",
+            "split": "2099-01-01",
+        },
+    )
+    assert r.status_code == 400 and "out-of-sample" in r.json()["detail"]

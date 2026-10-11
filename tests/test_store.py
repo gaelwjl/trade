@@ -126,3 +126,27 @@ def test_cash_kinds_are_validated(engine):
         ledger.add_cash(s, D(2026, 1, 5), "deposit", 1000)
         _, flows, _ = ledger.records(s)
         assert flows[0].kind == "deposit" and flows[0].amount == 1000
+
+
+@pytest.mark.parametrize(
+    "start, split, end, ok",
+    [
+        (D(2005, 1, 1), D(2018, 1, 1), None, True),
+        (D(2015, 1, 1), D(2026, 10, 11), None, False),  # split after the last price
+        (D(2015, 1, 1), D(2026, 8, 1), None, False),  # under 90 days out of sample
+        (D(2015, 1, 1), D(2015, 2, 1), None, False),  # under 90 days in sample
+        (
+            D(2005, 1, 1),
+            D(2018, 1, 1),
+            D(2018, 2, 1),
+            False,
+        ),  # end too close to the split
+    ],
+)
+def test_run_dates_leave_data_on_both_sides(start, split, end, ok):
+    data_last = D(2026, 10, 9)
+    if ok:
+        runs.check_dates(start, split, end, data_last)
+    else:
+        with pytest.raises(ValueError):
+            runs.check_dates(start, split, end, data_last)

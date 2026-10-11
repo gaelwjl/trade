@@ -17,6 +17,7 @@ from ..store import runs
 from ..store import strategies as strat_store
 from ..store.db import session_scope, must_get
 from ..store.models import BacktestResultRow, BacktestRunRow
+from ..types import RunCurves
 from ..web.render import plain
 
 
@@ -65,13 +66,15 @@ def execute(run: BacktestRunRow, spec_params: tuple[str, dict]) -> BacktestResul
 
     path = runs.save_curves(
         run.id,
-        pd.DataFrame(
-            {
-                "equity": res.equity,
-                "turnover": res.turnover,
-                "costs": res.costs,
-                "exposure": res.exposure,
-            }
+        RunCurves(
+            pd.DataFrame(
+                {
+                    "equity": res.equity,
+                    "turnover": res.turnover,
+                    "costs": res.costs,
+                    "exposure": res.exposure,
+                }
+            )
         ),
     )
     run.data_as_of = panel.close.index[-1].date()

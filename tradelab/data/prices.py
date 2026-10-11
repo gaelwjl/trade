@@ -92,6 +92,14 @@ def price_path(symbol: str) -> Path:
     return PRICES_DIR / f"{symbol.replace('^', '_')}.parquet"
 
 
+def last_cached_date(symbol: str = "QQQ") -> dt.date | None:
+    """Last bar in the price cache (QQQ trades every session, so it dates the whole cache)."""
+    path = price_path(symbol)
+    if not path.exists():
+        return None
+    return pd.read_parquet(path, columns=["Close"]).index[-1].date()
+
+
 def _clean(df: Bars) -> Bars:
     df = df[[c for c in FIELDS if c in df.columns]].dropna(how="all", subset=["Close"])
     df.index = pd.to_datetime(df.index).tz_localize(None).normalize()
@@ -136,7 +144,7 @@ class RawHistory:
     actions: list[tuple[dt.date, str, float]]  # (ex_date, "split" | "dividend", value)
 
 
-def unadjust(bars: pd.DataFrame) -> RawHistory:
+def unadjust(bars: Bars) -> RawHistory:
     """Undo Yahoo's split adjustment.
 
     With ``auto_adjust=False`` Yahoo's Close and dividend amounts are still restated in today's

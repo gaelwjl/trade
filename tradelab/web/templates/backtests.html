@@ -99,7 +99,12 @@ const state = {
   period: store.get("bt.period", "full"), roll: store.get("bt.roll", "ret"),
   hidden: new Set(store.get("bt.hidden", [])), sortKey: "Sharpe", dir: -1,
 };
-if (!D.periods.some((p) => p.key === state.period)) state.period = "full";
+/* a period is usable when it holds at least two sessions of data */
+function hasData(p) {
+  const n = D.dates.filter((d) => (!p.start || d >= p.start) && (!p.end || d < p.end)).length;
+  return n >= 2;
+}
+if (!D.periods.some((p) => p.key === state.period && hasData(p))) state.period = "full";
 
 /* identity: strategies take categorical slots in fixed order; benchmarks are neutral + dashed */
 const strategies = S.filter((s) => s.kind === "strategy").map((s) => s.name);
@@ -177,6 +182,14 @@ function renderCharts() {
   const legend = names.map((n) => `<span class="it">${swatch(n)}${esc(n)}</span>`).join("") || '<span class="it">No series selected</span>';
   document.querySelectorAll(".legend").forEach((el) => { el.innerHTML = legend; });
   const curves = Object.fromEntries(names.map((n) => [n, curve(n)]));
+  if (!names.some((n) => curves[n].x.length > 1)) {
+    for (const id of ["eq", "dd", "roll"]) {
+      Plotly.purge(id);
+      $("#" + id).innerHTML = `<div class="empty">No data for ${esc(period().label)}${names.length ? "" : " (no series selected)"}.</div>`;
+    }
+    return;
+  }
+  for (const id of ["eq", "dd", "roll"]) { const e = $("#" + id).querySelector(".empty"); if (e) e.remove(); }
   Plotly.react("eq", names.map((n) => lineOf(n, curves[n].x, curves[n].y, "$%{y:,.2f}")),
     baseLayout({ type: "log", tickprefix: "$", tickformat: ",.2~f" }), PLOT_CONFIG);
   Plotly.react("dd", names.map((n) => {
@@ -227,7 +240,9 @@ function init() {
   initTheme(renderAll);
   const m = D.meta;
   $("#meta").textContent = `${m.universe} stocks · ${m.first} → ${m.last} · ${m.cost_bps} bps one-way · fills at ${m.execution}`;
-  $("#periods").innerHTML = D.periods.map((p) => `<button class="chip" data-period="${p.key}">${esc(p.label)}</button>`).join("");
+  $("#periods").innerHTML = D.periods.map((p) => hasData(p)
+    ? `<button class="chip" data-period="${p.key}">${esc(p.label)}</button>`
+    : `<button class="chip" data-period="${p.key}" disabled title="No data in this period: the split is at or after the last price (${esc(D.meta.last)})">${esc(p.label)}</button>`).join("");
   $("#periods").addEventListener("click", (e) => {
     const b = e.target.closest("[data-period]"); if (!b) return;
     state.period = b.dataset.period; store.set("bt.period", state.period); syncButtons(); renderAll();

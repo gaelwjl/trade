@@ -6,13 +6,14 @@ import pandas as pd
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from ..data.prices import price_path
+from ..data.prices import last_cached_date
 from ..live.signals import expected_last_session
 from ..store import daily as daily_store
 from ..store import ledger, runs, views
 from ..store import strategies as strat_store
 from ..store.db import must_get
 from ..store.models import CashFlowRow, FillRow, StrategyConfigRow
+from ..types import PositionTable
 from .deps import db, iso, row_dict
 from .schemas import CashIn, FillIn, FillPatch
 
@@ -27,10 +28,8 @@ SUGGESTION_COLS += ["filled_qty"]
 
 
 def data_last_date() -> str | None:
-    path = price_path("QQQ")
-    if not path.exists():
-        return None
-    return iso(pd.read_parquet(path, columns=["Close"]).index[-1].date())  # type: ignore[return-value]
+    last = last_cached_date()
+    return last.isoformat() if last else None
 
 
 def _num(v: object) -> object:
@@ -43,7 +42,7 @@ def _num(v: object) -> object:
     return None if pd.isna(f) else f
 
 
-def records(df: pd.DataFrame) -> list[dict]:
+def records(df: PositionTable) -> list[dict]:
     return [
         {k: _num(v) for k, v in r.items()} for r in df.reset_index().to_dict("records")
     ]
